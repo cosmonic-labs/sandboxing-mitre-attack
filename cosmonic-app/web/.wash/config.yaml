@@ -1,0 +1,14 @@
+# wash v2 config for the WEB component.
+#
+# This component serves the branded UI. It is the mirror image of the viewer: it
+# has NO filesystem (no volume) and NO network egress. On /run it passes the
+# requested file name across the host runtime link to the viewer and returns the
+# viewer's JSON report.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/path_traversal_web.wasm
+workload:
+  # Deny-all egress. The web component calls nothing server-side.
+  allowedHosts: []
+  # No volumeMounts, no volumes: this component has no on-disk authority at all.

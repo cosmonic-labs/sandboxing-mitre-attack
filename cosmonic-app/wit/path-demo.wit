@@ -1,0 +1,39 @@
+package cosmonic:path-demo@0.1.0;
+
+/// The private, in-host interface between the two sandboxed components.
+///
+/// The `web` component (which has NO filesystem) hands a user-supplied file
+/// name across this link to the `viewer` component (whose only authority is the
+/// single preopened directory `/var/app/config`). The name travels as raw bytes,
+/// not a `string`, so the fuzz harness can send byte sequences that are not
+/// valid UTF-8 and the viewer receives exactly what the client sent.
+///
+/// Two components, two disjoint capability grants, one function between them.
+interface viewing {
+  /// Run one request against the config viewer and return a JSON report of what
+  /// was asked for versus what the sandbox allowed.
+  ///
+  /// `mode` selects the request:
+  ///   - `read`     view the config file called `name` (the vulnerable path join)
+  ///   - `variant`  view corpus entry number `name` (ASCII decimal)
+  ///   - `corpus`   list the evasion corpus compiled into the component
+  ///   - `fuzz`     run every corpus entry and summarise
+  ///   - `env`      report environment variables, arguments, preopens and probes
+  ///   - `all`      headline attempt + legitimate read + environment + fuzz
+  run: func(mode: string, name: list<u8>) -> string;
+}
+
+/// The viewer component: exports the viewing interface and nothing else. It has
+/// no HTTP surface of its own; the host invokes it only through the runtime
+/// link from `web`. Its filesystem authority (the `/var/app/config` volume) is
+/// granted per-component in the Workload, not here.
+world viewer {
+  export viewing;
+}
+
+/// The web component: imports the viewing interface. Its HTTP entrypoint
+/// (wasi:http/handler) is generated separately by the `wasip3` crate, so it is
+/// not declared here.
+world web {
+  import viewing;
+}

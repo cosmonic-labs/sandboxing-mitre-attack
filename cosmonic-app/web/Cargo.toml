@@ -1,0 +1,34 @@
+[package]
+name = "path-traversal-web"
+edition = "2021"
+version = "0.1.0"
+# p3 build floor: wasip3's component-type section needs wasm-component-ld
+# >= 0.5.20 (bundled with Rust >= 1.94).
+rust-version = "1.94"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# WASI 0.3 (p3) HTTP handler. This component only serves the UI and forwards
+# the requested name. It has NO filesystem and NO network grants. `wit-bindgen`
+# is also used directly (see `path_link` in src/lib.rs) to generate the
+# runtime-link import of the viewer's `viewing` interface.
+wasip3 = { version = "0.9.0", features = ["http-compat"] }
+wit-bindgen = { version = "0.62.0", default-features = false, features = [
+    "macros",
+    "async",
+    "async-spawn",
+    "inter-task-wakeup",
+] }
+
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -1,0 +1,5 @@
+CANARY-path-traversal-sandbox-5c1e9a47d2b8
+This file is the fuzz harness's escape detector. It holds no secret.
+It lives OUTSIDE the directory mounted into the sandbox (a sibling of config/).
+If a response from the config viewer ever contains the first line of this file,
+a path escaped the preopen: that is a real finding and should be reported upstream.

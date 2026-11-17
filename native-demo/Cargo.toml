@@ -1,0 +1,9 @@
+[package]
+name = "path-traversal-native-demo"
+edition = "2021"
+version = "0.1.0"
+description = "The config viewer's path-traversal bug (CWE-22), run natively with no sandbox against a throwaway directory tree."
+
+[workspace]
+
+[dependencies]
