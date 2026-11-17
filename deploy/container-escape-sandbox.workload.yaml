@@ -1,0 +1,43 @@
+# Durable Workload — the container-escape sandbox demo (MITRE ATT&CK T1609 / T1610).
+#
+# ONE workload, ONE component:
+#
+#   runner  exports wasi:http/handler (the UI + /run). A "CI runner" that
+#           executes the steps of whatever job it is handed. A poisoned job
+#           probes for the container runtime's control plane: docker.sock,
+#           containerd's socket, the Docker API over TCP, the service-account
+#           token, the kubelet and the Kubernetes API server.
+#           Grants: NONE. No volume, allowedHosts: [].
+#
+# The security policy is everything this file does NOT say:
+#   - no `volumes` / `volumeMounts`  -> no /var/run, no /proc, no token path
+#   - `allowedHosts: []`             -> no route to any runtime API over HTTP
+#   - the component imports no wasi:sockets, and WASI has no process spawn
+#
+# The image is in Cosmonic Desktop's built-in registry (oci.localhost:8200),
+# pinned by digest. Build and push it first; see cosmonic-app/README.md.
+#
+# Apply: cosmonic_workload_apply(<this file>)  (or the Control equivalent).
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: container-escape-sandbox
+  namespace: default
+  annotations:
+    # The local demo image is unsigned, so Cosmonic Desktop needs this to run
+    # it. For a Cosmonic Control / production deployment, SIGN the image and
+    # REMOVE this annotation — do not weaken signature enforcement there.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    - name: runner
+      image: oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.2@sha256:01bd275517fe08d5af9c7d41394fb8b1f557d9f9448e2872fb7f01f143309d59
+      poolSize: 8
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                             # p3 wasi:http/handler@0.3.0
+      config:
+        host: container-escape-sandbox.localhost        # http://container-escape-sandbox.localhost:8200/
