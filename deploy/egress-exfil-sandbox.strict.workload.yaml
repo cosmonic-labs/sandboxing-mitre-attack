@@ -1,0 +1,38 @@
+# Durable Workload: the egress-exfil sandbox demo, STRICT variant.
+#
+# The same workload and the same image as egress-exfil-sandbox.workload.yaml,
+# with the allow-list emptied: allowedHosts: [] is deny-all. Now nothing leaves.
+# The attacker host is refused exactly as before, and so is the log sink: the
+# "send to allowed host" button reports the runtime's denial instead of a 200,
+# and the fuzz control fails, which is the correct result for this manifest.
+#
+# It has the same name and ingress host as the default manifest, so applying it
+# replaces that one. Re-apply egress-exfil-sandbox.workload.yaml to go back.
+#
+# Apply: cosmonic_workload_apply(<this file>)
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: egress-exfil-sandbox
+  namespace: default
+  annotations:
+    # Local unsigned image. For Cosmonic Control / production, SIGN the image
+    # and REMOVE this annotation.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    - name: shipper
+      image: oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.2@sha256:e969679a05e4a7c2eb97ee0232d0c40b5c09eaece0f1c685a7cca57d46ddfe63
+      poolSize: 8
+      localResources:
+        environment:
+          config:
+            # Still configured, no longer reachable.
+            LOG_SINK_URL: http://egress-exfil-logsink.localhost:8200/ingest
+        allowedHosts: []   # deny-all egress: no host is reachable
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                       # p3 wasi:http/handler@0.3.0
+      config:
+        host: egress-exfil-sandbox.localhost      # http://egress-exfil-sandbox.localhost:8200/

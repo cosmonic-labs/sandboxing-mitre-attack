@@ -1,0 +1,15 @@
+[package]
+name = "egress-exfil-native"
+version = "0.1.0"
+edition = "2021"
+description = "Native baseline for the egress-exfil sandbox demo: the same hijacked log shipper with no sandbox. It delivers its workspace to a listener it starts itself on 127.0.0.1."
+
+[workspace]
+
+[[bin]]
+name = "egress-exfil-native"
+path = "src/main.rs"
+
+# No dependencies: std's TcpStream is all the "egress" a native process needs,
+# and nothing asks whether it should be allowed.
+[dependencies]

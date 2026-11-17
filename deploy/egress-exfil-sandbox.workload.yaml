@@ -1,0 +1,51 @@
+# Durable Workload: the egress-exfil sandbox demo (MITRE ATT&CK T1041).
+#
+# ONE workload, ONE component, ONE grant:
+#
+#   shipper    exports wasi:http/handler (the UI and /run), imports
+#              wasi:http/client (the outbound POST the attack uses).
+#              Grants: allowedHosts: ["egress-exfil-logsink.localhost"].
+#              No volume (no filesystem). No sockets. No loopback ports.
+#
+# The shipper has a real bug: it obeys a routing instruction hidden in the log
+# data it ships, and tries to POST its workspace to an attacker host. The
+# application has no allow-list of its own. The line below is the whole
+# mitigation: any host that is not on it is refused by the runtime before a
+# connection is opened.
+#
+# The allow-listed host is the log sink (egress-exfil-logsink.workload.yaml), a
+# second workload on this machine. Apply that one first.
+#
+# For deny-all, apply egress-exfil-sandbox.strict.workload.yaml instead.
+#
+# Apply: cosmonic_workload_apply(<this file>)  (or the Control equivalent).
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: egress-exfil-sandbox
+  namespace: default
+  annotations:
+    # Local unsigned image. For Cosmonic Control / production, SIGN the image
+    # and REMOVE this annotation; do not weaken signature enforcement there.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    - name: shipper
+      image: oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.2@sha256:e969679a05e4a7c2eb97ee0232d0c40b5c09eaece0f1c685a7cca57d46ddfe63
+      poolSize: 8
+      localResources:
+        environment:
+          config:
+            # Where the shipper sends logs when nothing hijacks it. Not a
+            # grant: reaching it still depends on allowedHosts below.
+            LOG_SINK_URL: http://egress-exfil-logsink.localhost:8200/ingest
+        # The egress allow-list. Hostname only, exact match. Everything else,
+        # including the attacker host, is refused by the runtime.
+        allowedHosts:
+          - egress-exfil-logsink.localhost
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                       # p3 wasi:http/handler@0.3.0
+      config:
+        host: egress-exfil-sandbox.localhost      # http://egress-exfil-sandbox.localhost:8200/

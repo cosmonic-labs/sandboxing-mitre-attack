@@ -1,0 +1,34 @@
+# Durable Workload: the log sink, the legitimate destination in the
+# egress-exfil sandbox demo.
+#
+# This is NOT the sandbox under test. It is the one host the shipper
+# (egress-exfil-sandbox.workload.yaml) is allow-listed to reach, deployed on the
+# same machine so the "send to allowed host" button is a real HTTP request that
+# really returns 200 and nothing leaves the laptop.
+#
+#   logsink    exports wasi:http/handler. POST /ingest returns a receipt.
+#              Grants: NONE. No volume, allowedHosts: [] (it only receives).
+#
+# Apply this first: cosmonic_workload_apply(<this file>)
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: egress-exfil-logsink
+  namespace: default
+  annotations:
+    # Local unsigned image. For Cosmonic Control / production, SIGN the image
+    # and REMOVE this annotation.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    - name: logsink
+      image: oci.localhost:8200/apps/egress-exfil-sandbox-logsink:0.1.0@sha256:c5aa6fe756ef552a600f229ad0a9fc0ebc6db4e031cca8d0e6a3b1b64722520e
+      poolSize: 4
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                       # p3 wasi:http/handler@0.3.0
+      config:
+        host: egress-exfil-logsink.localhost      # http://egress-exfil-logsink.localhost:8200/

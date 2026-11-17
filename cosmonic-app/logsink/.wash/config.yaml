@@ -1,0 +1,14 @@
+# wash v2 config for the LOG SINK component.
+#
+# The legitimate destination in the story: the one host the shipper is
+# allow-listed to reach. It runs as its own workload on the same machine, so the
+# "allowed" path is genuinely live and nothing ever leaves the laptop. It only
+# receives; it has no outbound network and no filesystem.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/egress_exfil_logsink.wasm
+workload:
+  # Deny-all egress. The sink calls nothing.
+  allowedHosts: []
+  # No volumeMounts, no volumes: what it receives is counted and dropped.
