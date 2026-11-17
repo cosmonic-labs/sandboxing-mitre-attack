@@ -1,0 +1,31 @@
+[package]
+name = "resource-hijack-miner"
+edition = "2021"
+version = "0.1.0"
+# p3 build floor: wasip3's component-type section (0.7.x onward) needs
+# wasm-component-ld >= 0.5.20 (bundled with Rust >= 1.94).
+rust-version = "1.94"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# WASI 0.3 (p3) HTTP handler + client. The client is used for exactly one
+# thing: the "dial a pool" attempt, which the workload's empty allowedHosts
+# refuses.
+wasip3 = { version = "0.9.0", features = ["http-compat"] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+# The stand-in "miner" is an iterated SHA-256 loop. No mining protocol, no
+# pool client, no wallet: just CPU-bound hashing.
+sha2 = { version = "0.10", default-features = false }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

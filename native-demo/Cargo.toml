@@ -1,0 +1,16 @@
+[package]
+name = "resource-hijack-native"
+version = "0.1.0"
+edition = "2021"
+description = "Native baseline for the resource-hijack sandbox demo: the same hashing loop, with no sandbox, spreads across every core."
+
+[[bin]]
+name = "resource-hijack-native"
+path = "src/main.rs"
+
+[dependencies]
+# Same stand-in "miner" as the component: iterated SHA-256 over a counter.
+sha2 = { version = "0.10", default-features = false }
+
+[profile.release]
+opt-level = 3

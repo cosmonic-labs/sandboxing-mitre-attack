@@ -1,0 +1,31 @@
+// The world of the one component in this demo.
+//
+// This file is documentation: the `miner` crate gets its bindings from the
+// `wasip3` crate, which already targets this world, so nothing is generated
+// from here. It is written down so the capability surface is easy to read.
+// It lists the interfaces the code calls on purpose. Rust's standard library
+// also links the usual wasi:cli (environment, exit, stdio), wasi:io,
+// wasi:clocks/wall-clock and wasi:random/insecure-seed imports;
+// `cosmonic_image_inspect` prints the complete list.
+//
+// What is NOT in this world is the point of the demo:
+//   - no thread-spawn interface (there is none in WASI 0.2 / 0.3),
+//   - no process interface (WASI has no fork or exec),
+//   - no wasi:sockets (the only way out is wasi:http/client, and the workload's
+//     empty allowedHosts refuses every request made through it),
+//   - no wasi:filesystem preopen (the workload mounts no volume).
+//
+// What IS here, and cannot be taken away from code that is allowed to run:
+// the component's own linear memory and the CPU time of its own invocation.
+package cosmonic:resource-demo@0.1.0;
+
+world miner {
+  // Inbound: the UI and the /run and /probe endpoints.
+  export wasi:http/handler@0.3.0;
+
+  // Outbound HTTP: used for exactly one thing, the "dial a pool" attempt.
+  import wasi:http/client@0.3.0;
+
+  // Clocks: the in-component wall-clock budget on every CPU burn.
+  import wasi:clocks/monotonic-clock@0.3.0;
+}
