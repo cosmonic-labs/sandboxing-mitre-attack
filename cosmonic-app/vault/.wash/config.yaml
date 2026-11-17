@@ -1,0 +1,13 @@
+# wash v2 config for the VAULT component.
+#
+# Holds the (fake, inert) secret in its own linear memory and exports one
+# function, `reveal`. No volume, no network, no HTTP surface: it is reachable
+# only through the runtime link from `web`.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/memory_boundary_vault.wasm
+workload:
+  # Deny-all egress.
+  allowedHosts: []
+  # No volumeMounts, no volumes: no on-disk authority.

@@ -1,0 +1,47 @@
+package cosmonic:memory-demo@0.1.0;
+
+/// The private, in-host interface to the `parser` component.
+///
+/// `parser` is a C record decoder with a deliberate out-of-bounds write
+/// (CWE-787). It takes the untrusted record as plain bytes and hands back a
+/// JSON report. Note what the `parser` world below does NOT have: an import.
+/// There is no function in its world that names another component's memory,
+/// a process, a file or a socket. That absence is the boundary this demo
+/// tests: the write can run as far as the parser's own linear memory goes,
+/// and no further.
+interface parsing {
+  /// Decode one record and report what the decoder did.
+  ///
+  /// `ok`  is a JSON report (decoded length, how far past its buffer the
+  ///       decoder wrote, and the state of the parser's own adjacent buffer).
+  /// `err` is a plain message for a record the decoder refused (bad magic,
+  ///       truncated header). An out-of-bounds write that leaves the linear
+  ///       memory returns neither: the instance traps.
+  parse: func(%record: list<u8>) -> result<string, string>;
+}
+
+/// The private, in-host interface to the `vault` component: a sibling in the
+/// same workload that holds a secret in ITS OWN linear memory.
+interface secrets {
+  /// Return the secret the vault holds. The demo calls this before and after
+  /// the parser's overflow to show the bytes never changed.
+  reveal: func() -> string;
+}
+
+/// The vulnerable parser: exports `parsing` and imports nothing.
+world parser {
+  export parsing;
+}
+
+/// The vault: exports `secrets` and imports nothing.
+world vault {
+  export secrets;
+}
+
+/// The web component: imports both interfaces so it can drive the parser and
+/// read the vault. Its HTTP entrypoint (wasi:http/handler) is generated
+/// separately by the `wasip3` crate, so it is not declared here.
+world web {
+  import parsing;
+  import secrets;
+}

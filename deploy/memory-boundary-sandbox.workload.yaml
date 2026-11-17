@@ -1,0 +1,65 @@
+# Durable Workload — the memory-boundary sandbox demo (scaffold build).
+#
+# ONE workload, THREE components, auto-linked by the host through the private
+# cosmonic:memory-demo@0.1.0 interfaces. Each component is its own sandbox with
+# its own linear memory and its own (empty) grant set:
+#
+#   web     exports wasi:http/handler (the UI + entrypoint); imports
+#           cosmonic:memory-demo/parsing and /secrets.
+#           Grants: NONE. No volume, allowedHosts: [].
+#   parser  exports cosmonic:memory-demo/parsing (C record parser).
+#           Imports: NONE AT ALL. Grants: NONE. No HTTP surface.
+#   vault   exports cosmonic:memory-demo/secrets (holds an inert fake secret).
+#           Grants: NONE. No HTTP surface.
+#
+# STATUS: the parser in these images is a correct, bounds-checked parser. The
+# deliberate out-of-bounds write and the linear-memory trap are not implemented
+# (see README, "Status").
+#
+# Images are in Cosmonic Desktop's built-in registry (oci.localhost:8200),
+# pinned by digest. Build and push them first; see cosmonic-app/README.md.
+#
+# Apply: cosmonic_workload_apply(<this file>)  (or the Control equivalent).
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: memory-boundary-sandbox
+  namespace: default
+  annotations:
+    # The local demo images are unsigned, so Cosmonic Desktop needs this to run
+    # them. For a Cosmonic Control / production deployment, SIGN the images and
+    # REMOVE this annotation — do not weaken signature enforcement there.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    # The UI + HTTP entrypoint. Imports parsing and secrets (satisfied by the
+    # two components below, auto-linked). Zero capability grants.
+    - name: web
+      image: oci.localhost:8200/apps/memory-boundary-sandbox-web:0.1.0@sha256:4dc0470e51b0487a613aa6d9a6e8cfcda9f2fca4eb30cef716e23135010ff503
+      poolSize: 8
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
+
+    # The C record parser: the component that touches untrusted bytes. No
+    # imports, no grants, no HTTP.
+    - name: parser
+      image: oci.localhost:8200/apps/memory-boundary-sandbox-parser:0.1.0@sha256:0364e97de131e842759616ed5d8bb2759f980e0052f89301cc4ff420fb7e8355
+      poolSize: 1
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume
+
+    # The vault: holds the (fake) secret in its own linear memory. No grants,
+    # no HTTP.
+    - name: vault
+      image: oci.localhost:8200/apps/memory-boundary-sandbox-vault:0.1.0@sha256:f2926845f833ae8968b29e2a618d7fb6d82983dcfd5ceeada79a04f34d834215
+      poolSize: 1
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume
+  hostInterfaces:
+    # Binds to the component that exports wasi:http/handler (web). parser and
+    # vault have no HTTP surface, so routing is unambiguous.
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                             # p3 wasi:http/handler@0.3.0
+      config:
+        host: memory-boundary-sandbox.localhost         # http://memory-boundary-sandbox.localhost:8200/
