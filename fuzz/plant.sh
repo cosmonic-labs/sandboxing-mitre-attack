@@ -24,30 +24,11 @@ if [ "${1:-}" = "--clean" ]; then echo "removed $links"; exit 0; fi
 mkdir -p "$links"
 cd "$links"
 
-# controls: stay inside the preopen
-ln -s ../app.conf                 inside-file
-ln -s ../profiles                 inside-dir
-
-# file links to the canary
-ln -s ../../outside/CANARY.txt    canary-rel
-ln -s ../../outside/CANARY.txt/   canary-rel-slash
-ln -s "$outside/CANARY.txt"       canary-abs
-
-# directory links to the canary's directory, with and without a trailing slash
-ln -s ../../outside               outside-rel
-ln -s ../../outside/              outside-rel-slash
-ln -s ../../outside/.             outside-rel-dot
-ln -s "$outside"                  outside-abs
-ln -s "$outside/"                 outside-abs-slash
-
-# links to a parent of the preopen and to the filesystem root
-ln -s ../..                       parent
-ln -s ../../                      parent-slash
-ln -s /                           root-abs
-
-# chains and a loop
-ln -s canary-rel                  chain-file
-ln -s outside-rel-slash           chain-dir
-ln -s loop                        loop
+# The link list is fuzz/links.txt (`<name> <target>`), shared with the seeder
+# and viewer components. {OUT} becomes this checkout's canary directory.
+while read -r name target; do
+  case "$name" in ''|'#'*) continue ;; esac
+  ln -s "${target//\{OUT\}/$outside}" "$name"
+done < "$here/links.txt"
 
 ls -l "$links"

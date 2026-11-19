@@ -9,6 +9,11 @@ package cosmonic:path-demo@0.1.0;
 /// valid UTF-8 and the viewer receives exactly what the client sent.
 ///
 /// Two components, two disjoint capability grants, one function between them.
+///
+/// (The workload's third component, `seeder`, is deliberately NOT part of this
+/// package: it shares no interface with either of these. Components that are
+/// linked run in one store and can see each other's volume mounts, so the one
+/// component with write access to the volume is kept unlinked.)
 interface viewing {
   /// Run one request against the config viewer and return a JSON report of what
   /// was asked for versus what the sandbox allowed.
@@ -20,6 +25,8 @@ interface viewing {
   ///   - `fuzz`     run every corpus entry and summarise
   ///   - `env`      report environment variables, arguments, preopens and probes
   ///   - `all`      headline attempt + legitimate read + environment + fuzz
+  ///   - `ready`    `{"ready":true}` once the sample files are in the volume
+  ///   - `seed-report`  what the seeder recorded when it filled the volume
   run: func(mode: string, name: list<u8>) -> string;
 }
 

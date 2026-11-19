@@ -1,4 +1,4 @@
-# The sandboxed half: one vulnerable viewer, split across two components
+# The sandboxed half: one vulnerable viewer, split across components
 
 The branded demo. It runs the same path join as the [native baseline](../native-demo/README.md),
 a CWE-22 path traversal marked `// VULN:` in [`viewer/src/viewer.rs`](viewer/src/viewer.rs),
@@ -9,6 +9,10 @@ workload**, each its own sandbox with its own capability grants:
 |-----------|-----------|------------|---------|------|------|
 | **web** | [`web/`](web/) | none | deny-all | exports `wasi:http/handler` | Serves the branded UI. Forwards the requested name across the link. |
 | **viewer** | [`viewer/`](viewer/) | `/var/app/config` only, read-only | deny-all | none (linked only) | The config viewer, with the bug. Reachable only via the link. |
+| **seeder** | [`seeder/`](seeder/) | the same volume at `/seed`, read-write | deny-all | none (not linked) | The workload's run-once `service`. Writes the sample files into an empty volume at startup. |
+
+`seeder` is not part of the web/viewer pair. It exists because the default manifest's volume is
+`ephemeral` and starts empty; see [The seeder](#the-seeder).
 
 When the page calls `/run`, `web` hands the requested name to `viewer` through the host's runtime
 link (`cosmonic:path-demo/viewing.run(mode, name) -> string`). The name is a `list<u8>`, not a
@@ -31,9 +35,29 @@ all.
    runtime's own error (`os error 63`, `os error 44`).
 2. **Read-only.** The mount is `readOnly: true`; create, append and mkdir are refused.
 3. **Empty environment.** No variables are passed, so none can leak.
-4. **Deny-all egress.** Both components ship `allowedHosts: []`.
+4. **Deny-all egress.** All three components ship `allowedHosts: []`.
 5. **No filesystem on `web`, no HTTP on `viewer`.** `web` imports no `wasi:filesystem`; `viewer`
    exports no `wasi:http` and has no hostname. Confirm with `cosmonic_image_inspect`.
+
+## The seeder
+
+[`seeder/`](seeder/) is a command component (`wasi:cli/run`) declared as the Workload's `service`,
+so the host runs it once when the workload starts. Its mount of the volume is read-write. It
+writes `database.conf`, `profiles/staging.conf`, `profiles/café.conf`, the `links/` fixtures from
+[`../fuzz/links.txt`](../fuzz/links.txt), a `.seed-report.json`, and `app.conf` last; `web` waits
+for `viewing.run("ready")` (does `app.conf` exist) before forwarding the first request. Everything
+it writes is compiled in. It reads no request, argument or environment variable.
+
+- **Symlinks are best effort.** `{OUT}` in a link target becomes `/outside` (there is no host
+  path to use). On Cosmonic Desktop 0.5.33 the runtime refused all four absolute-target links
+  with `not-permitted` and created the other twelve. Each refusal is recorded in the report
+  (`/run?mode=seed-report`) and never fails the seed.
+- **It must stay unlinked.** Linked components share one store and see each other's volume
+  mounts. With `seeder` exporting an interface that `web` imported, `viewer` gained `/seed` as a
+  second, writable preopen (measured; the write probes in `/run?mode=env` cover every preopen for
+  this reason). As a service with no shared interface it has its own store.
+- **In the hostPath manifest** its mount is `readOnly: true`. The directory already holds the
+  sample files, so it writes nothing and exits.
 
 ## What the viewer reports
 
@@ -50,7 +74,9 @@ runtime's own answer:
 preopen (without following symlinks). A successful read must be byte-identical to one of those
 files and a successful listing must equal one of those directories; anything else came from
 outside. Outside content is never echoed back unless it is the fuzz canary. See
-[`viewer/src/probe.rs`](viewer/src/probe.rs).
+[`viewer/src/probe.rs`](viewer/src/probe.rs). The fuzz report also lists `symlink_fixtures_absent`:
+fixture links that are not in the volume, which happens on a seeded volume when the runtime
+refuses to create them. Variants that name one get `No such file or directory` and test nothing.
 
 ## Routes
 
@@ -62,6 +88,7 @@ outside. Outside content is never echoed back unless it is the fuzz canary. See
 - `GET /run?mode=variant&id=N`, `/run?mode=corpus`, `/run?mode=fuzz`: the evasion corpus.
 - `GET /run?mode=env`: environment, preopens, credential-path probes, write probes.
 - `GET /run?mode=all`: all of the above, summarised.
+- `GET /run?mode=seed-report`: what the seeder wrote and which links were refused (seeded volumes only).
 
 ```bash
 curl -s -H 'Host: path-traversal-sandbox.localhost' http://127.0.0.1:8200/run | python3 -m json.tool
@@ -87,24 +114,28 @@ bindings for its entrypoint, so its two component-type sections are kept distinc
 
 ## Build & deploy
 
-Two `wash` projects, one workload. Build, push, and apply the single durable Workload:
+Three `wash` projects, one workload. Build, push, and apply one of the two durable Workloads:
 
 ```bash
 # build
-(cd viewer && cargo build --target wasm32-wasip2 --release)
-(cd web    && cargo build --target wasm32-wasip2 --release)
+(cd viewer && wash build)
+(cd web    && wash build)
+(cd seeder && wash build)
 # push (bump the tag on every rebuild)
-wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.1  viewer/target/wasm32-wasip2/release/path_traversal_viewer.wasm
-wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.2     web/target/wasm32-wasip2/release/path_traversal_web.wasm
-# apply (update the digests and the hostPath in the manifest first):
-#   cosmonic_workload_apply(../deploy/path-traversal-sandbox.workload.yaml)
+wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.5  viewer/target/wasm32-wasip2/release/path_traversal_viewer.wasm
+wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.4     web/target/wasm32-wasip2/release/path_traversal_web.wasm
+wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-seeder:0.1.2  seeder/target/wasm32-wasip2/release/path_traversal_seeder.wasm
+# apply (update the digests in both manifests first):
+#   cosmonic_workload_apply(../deploy/path-traversal-sandbox.workload.yaml)        ephemeral volume
+#   cosmonic_workload_apply(../deploy/path-traversal-sandbox.fuzz.workload.yaml)   hostPath + canary
 ```
 
-The manifest carries the read-only `/var/app/config` volume on `viewer`, deny-all egress on both,
-and one `wasi:http/handler` hostInterface (which binds to `web`, the only HTTP exporter). The
-`cosmonic dev` loop and publish drafts strip the volume, so deploy the durable manifest in
-[`../deploy/path-traversal-sandbox.workload.yaml`](../deploy/path-traversal-sandbox.workload.yaml),
-not dev. The corpus in [`../fuzz/corpus.txt`](../fuzz/corpus.txt) is compiled into `viewer`
+Both manifests carry the read-only `/var/app/config` mount on `viewer`, the `seeder` service,
+deny-all egress on all three, and one `wasi:http/handler` hostInterface (which binds to `web`, the
+only HTTP exporter). They differ in the volume: `ephemeral` with the seeder's mount read-write
+(the default, which also runs on a cluster), or `hostPath` at `../deploy/volume/config` with the
+seeder's mount read-only (for `fuzz/plant.sh` and `fuzz/run.py`). The `cosmonic dev` loop and
+publish drafts strip the volume, so deploy a durable manifest, not dev. The corpus in [`../fuzz/corpus.txt`](../fuzz/corpus.txt) is compiled into `viewer`
 (`include_str!`), so rebuild `viewer` after editing it.
 
 ## Layout
@@ -113,4 +144,6 @@ not dev. The corpus in [`../fuzz/corpus.txt`](../fuzz/corpus.txt) is compiled in
 - `web/`: UI (`src/page.rs`) and routing (`src/lib.rs`). No disk.
 - `viewer/`: the vulnerable join (`src/viewer.rs`), the live probes and inventory
   (`src/probe.rs`), the corpus loader (`src/corpus.rs`), reports (`src/lib.rs`). The volume lives here.
-- `../deploy/path-traversal-sandbox.workload.yaml`: the single durable Workload (both components).
+- `seeder/`: the run-once service (`src/main.rs`). The only write access to the volume.
+- `../deploy/path-traversal-sandbox.workload.yaml`: the default durable Workload (ephemeral volume).
+- `../deploy/path-traversal-sandbox.fuzz.workload.yaml`: the hostPath variant for the fuzz harness.

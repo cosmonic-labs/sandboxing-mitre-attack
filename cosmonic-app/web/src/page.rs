@@ -414,7 +414,7 @@ pub const PAGE: &str = r###"<!doctype html>
         stat(r.controls_ok===r.controls_total?'good':'bad', r.controls_ok+'/'+r.controls_total, 'legitimate reads served'),
       ].join('');
       const rows=(r.results||[]).map(v=>{
-        const a=v.attempt; const ans=a?a.std_fs.read:'embeds the host path of the canary; run by fuzz/run.py';
+        const a=v.attempt; const ans=a?a.std_fs.read:'embeds an absolute host path, which the component cannot learn; only the host-side harness can supply it';
         return '<tr><td>'+v.id+'</td><td>'+esc(v.technique)+'</td><td class="wrapany">'+esc(v.name)+'</td><td>'+tag(v.outcome)+'</td><td class="wrapany">'+esc(ans)+'</td></tr>';
       }).join('');
       $('table').innerHTML = '<table><thead><tr><th>#</th><th>technique</th><th>name sent</th><th>outcome</th><th>std::fs read: the runtime\'s answer</th></tr></thead><tbody>'+rows+'</tbody></table>'
@@ -429,7 +429,7 @@ pub const PAGE: &str = r###"<!doctype html>
       return;
     }
     if(r.outcome==='skipped'){
-      $('verdict').innerHTML=verdictBox(true,'Skipped: this name embeds the host path of the canary directory, which the component cannot learn from inside the sandbox. fuzz/run.py runs it from the host.');
+      $('verdict').innerHTML=verdictBox(true,'Skipped: this name embeds an absolute path on the host, which the component cannot learn from inside the sandbox. Only a harness running on the host can supply it.');
       $('stats').innerHTML=''; $('table').innerHTML=raw(r); return;
     }
 

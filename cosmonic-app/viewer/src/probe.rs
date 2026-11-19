@@ -346,7 +346,8 @@ pub struct Environment {
     pub root_listing: String,
     /// `stat` only (never read) on well-known credential locations.
     pub credential_paths: Vec<PathProbe>,
-    /// Is the mount really read-only? Attempts to create and to open for append.
+    /// Is every preopen really read-only? Attempts to create a file and a
+    /// directory in each one, and to open an existing file for append.
     pub write_probes: Vec<WriteProbe>,
     pub verdict: String,
 }
@@ -410,7 +411,7 @@ pub fn environment() -> Environment {
         })
         .collect::<Vec<_>>();
 
-    let write_probes = write_probes();
+    let write_probes = write_probes(&preopens);
     let writable = write_probes.iter().any(|w| w.allowed);
     let visible = credential_paths.iter().filter(|p| p.result.starts_with("EXISTS")).count();
 
@@ -424,7 +425,7 @@ pub fn environment() -> Environment {
         preopens,
         visible,
         credential_paths.len(),
-        if writable { "WRITABLE (read-only is not enforced)" } else { "read-only (every write attempt was refused)" },
+        if writable { "WRITABLE (a write attempt was allowed)" } else { "read-only (every write attempt was refused)" },
     );
 
     Environment {
@@ -444,24 +445,16 @@ pub fn environment() -> Environment {
     }
 }
 
-/// Try to write inside the mount. If a probe file does get created it is
-/// removed again straight away; no existing file is ever modified.
-fn write_probes() -> Vec<WriteProbe> {
+/// Try to write inside every directory the host preopened (normally just the
+/// one config mount). If a probe file does get created it is removed again
+/// straight away; no existing file is ever modified.
+fn write_probes(preopens: &[String]) -> Vec<WriteProbe> {
     let mut out = Vec::new();
-
-    let probe = format!("{CONFIG_ROOT}/.write-probe");
-    out.push(match fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
-        Ok(f) => {
-            drop(f);
-            let _ = fs::remove_file(&probe);
-            WriteProbe {
-                attempt: format!("create {probe}"),
-                allowed: true,
-                result: "ALLOWED: probe file created (and removed again)".into(),
-            }
-        }
-        Err(e) => WriteProbe { attempt: format!("create {probe}"), allowed: false, result: format!("refused: {e}") },
-    });
+    let mut roots: Vec<&str> = vec![CONFIG_ROOT];
+    roots.extend(preopens.iter().map(String::as_str).filter(|p| *p != CONFIG_ROOT));
+    for root in roots {
+        create_probes(root, &mut out);
+    }
 
     let existing = format!("{CONFIG_ROOT}/app.conf");
     out.push(match fs::OpenOptions::new().append(true).open(&existing) {
@@ -478,7 +471,25 @@ fn write_probes() -> Vec<WriteProbe> {
         },
     });
 
-    let dir = format!("{CONFIG_ROOT}/.write-probe-dir");
+    out
+}
+
+fn create_probes(root: &str, out: &mut Vec<WriteProbe>) {
+    let probe = format!("{root}/.write-probe");
+    out.push(match fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(f) => {
+            drop(f);
+            let _ = fs::remove_file(&probe);
+            WriteProbe {
+                attempt: format!("create {probe}"),
+                allowed: true,
+                result: "ALLOWED: probe file created (and removed again)".into(),
+            }
+        }
+        Err(e) => WriteProbe { attempt: format!("create {probe}"), allowed: false, result: format!("refused: {e}") },
+    });
+
+    let dir = format!("{root}/.write-probe-dir");
     out.push(match fs::create_dir(&dir) {
         Ok(()) => {
             let _ = fs::remove_dir(&dir);
@@ -490,6 +501,4 @@ fn write_probes() -> Vec<WriteProbe> {
         }
         Err(e) => WriteProbe { attempt: format!("mkdir {dir}"), allowed: false, result: format!("refused: {e}") },
     });
-
-    out
 }

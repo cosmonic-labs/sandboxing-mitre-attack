@@ -1,4 +1,4 @@
-//! Path-traversal sandbox demo: the VIEWER component (Cosmonic Desktop).
+//! Path-traversal sandbox demo: the VIEWER component.
 //!
 //! A "config viewer" with a classic path-traversal bug (CWE-22): it joins a
 //! user-supplied name onto `/var/app/config` and reads the result (see
@@ -10,6 +10,9 @@
 //! `allowedHosts: []` means no network, and it exports no HTTP, so nothing
 //! outside the host can reach it directly. The `web` component has the opposite
 //! shape (HTTP + UI, no filesystem). Two sandboxes, two disjoint grant sets.
+//! (A third, unlinked component, `seeder`, fills the volume with the sample
+//! files when the workload starts with an empty one. It shares no interface
+//! with this component, so its write access is not reachable from here.)
 //!
 //! Every result reported here is the runtime's real answer to a real call.
 
@@ -43,9 +46,34 @@ impl Guest for Component {
             "fuzz" => serde_json::to_string(&fuzz(true, host_hint(&name))),
             "env" => serde_json::to_string(&probe::environment()),
             "all" => serde_json::to_string(&all()),
+            "ready" => Ok(format!("{{\"ready\":{}}}", ready())),
+            "seed-report" => Ok(seed_report()),
             other => Ok(format!("{{\"error\":\"unknown mode {other:?}\"}}")),
         };
         json.unwrap_or_else(|e| format!("{{\"error\":\"serialize failed: {e}\"}}"))
+    }
+}
+
+/// Are the sample files in the volume yet? On an ephemeral volume the seeder
+/// writes them when the workload starts, and writes `app.conf` last. `web`
+/// asks this before forwarding the first request, so a request that arrives
+/// in the first few milliseconds waits instead of finding an empty directory.
+fn ready() -> bool {
+    std::fs::metadata(format!("{CONFIG_ROOT}/app.conf")).is_ok_and(|m| m.is_file())
+}
+
+/// What the seeder recorded when it filled this volume: the files and symlink
+/// fixtures it created and the links the runtime refused to create, each with
+/// the runtime's own error. A volume the seeder did not fill (a hostPath
+/// directory that already held the sample files) has no report.
+fn seed_report() -> String {
+    match std::fs::read_to_string(format!("{CONFIG_ROOT}/.seed-report.json")) {
+        Ok(json) if serde_json::from_str::<serde_json::Value>(&json).is_ok() => json,
+        Ok(_) => "{\"error\":\".seed-report.json is not valid JSON\"}".into(),
+        Err(e) => serde_json::json!({
+            "error": format!("no seed report in this volume ({e}); it was not filled by the seeder")
+        })
+        .to_string(),
     }
 }
 
@@ -179,11 +207,27 @@ fn display(bytes: &[u8], max: usize) -> String {
 /// Try to learn the absolute HOST path of the canary's directory from inside
 /// the sandbox, by reading the planted `links/outside-abs` symlink. Some corpus
 /// names embed that path (`{OUT}`). The runtime is expected to refuse: a
-/// symlink with an absolute target would leak the host's layout.
+/// symlink with an absolute target would leak the host's layout. On a volume
+/// filled by the seeder component the link may not exist at all (the runtime
+/// can refuse to create an absolute symlink), which is reported as `absent`.
 fn outside_dir_from_symlink() -> Result<String, String> {
-    std::fs::read_link(format!("{CONFIG_ROOT}/links/outside-abs"))
-        .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|e| format!("refused: {e}"))
+    let link = format!("{CONFIG_ROOT}/links/outside-abs");
+    if let Err(e) = std::fs::symlink_metadata(&link) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return Err("absent: links/outside-abs does not exist in this volume".into());
+        }
+    }
+    std::fs::read_link(&link).map(|p| p.to_string_lossy().into_owned()).map_err(|e| format!("refused: {e}"))
+}
+
+/// Fixture links (fuzz/links.txt) that are not in the mounted volume. Variants
+/// that go through one of these find no link to follow.
+fn absent_symlink_fixtures() -> Vec<String> {
+    corpus::link_names()
+        .into_iter()
+        .filter(|name| std::fs::symlink_metadata(format!("{CONFIG_ROOT}/links/{name}")).is_err())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The host path as supplied by the external harness (`fuzz/run.py --out`),
@@ -286,9 +330,14 @@ struct FuzzReport {
     controls_total: usize,
     /// read + list + stat, through each route, for each variant.
     filesystem_calls: usize,
-    /// Were the symlink fixtures (fuzz/plant.sh) present in the mount?
+    /// Were any symlink fixtures (fuzz/links.txt) present in the mount?
     symlinks_planted: bool,
     symlinks_in_preopen: usize,
+    symlink_fixtures_expected: usize,
+    /// Fixture links missing from this volume. Variants that name one of these
+    /// are answered "No such file or directory" because the link is not there,
+    /// which says nothing about whether the runtime would have followed it.
+    symlink_fixtures_absent: Vec<String>,
     files_in_preopen: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     inventory_error: Option<String>,
@@ -317,9 +366,17 @@ fn fuzz(with_results: bool, host_hint: Option<String>) -> FuzzReport {
         .map(|a| if a.wasi_open_at.is_some() { 6 } else { 3 })
         .sum();
 
+    let fixtures_expected = corpus::link_names().len();
+    let fixtures_absent = absent_symlink_fixtures();
+
     let mut line = format!("{tried} variants tried, {escaped} escaped");
     if inv.symlinks == 0 {
-        line.push_str(" (symlink fixtures not planted: run fuzz/plant.sh)");
+        line.push_str(" (no symlink fixtures in this volume)");
+    } else if !fixtures_absent.is_empty() {
+        line.push_str(&format!(
+            " ({} of {fixtures_expected} symlink fixtures absent from this volume)",
+            fixtures_absent.len()
+        ));
     }
     if controls_ok != controls_total {
         line.push_str(&format!(" ({controls_ok}/{controls_total} controls served)"));
@@ -341,6 +398,8 @@ fn fuzz(with_results: bool, host_hint: Option<String>) -> FuzzReport {
         filesystem_calls,
         symlinks_planted: inv.symlinks > 0,
         symlinks_in_preopen: inv.symlinks,
+        symlink_fixtures_expected: fixtures_expected,
+        symlink_fixtures_absent: fixtures_absent,
         files_in_preopen: inv.files.len(),
         inventory_error: inv.error,
         failures: results.iter().filter(|r| !r.pass).map(|r| r.id).collect(),
@@ -368,19 +427,25 @@ fn all() -> All {
     let environment = probe::environment();
     let fuzz = fuzz(false, None);
 
+    let writable = environment.write_probes.iter().any(|w| w.allowed);
+    let only_config = environment.preopens.len() == 1 && environment.preopens[0] == CONFIG_ROOT;
     let contained = headline.outcome == "refused"
         && legitimate.outcome == "inside"
         && fuzz.escaped == 0
         && fuzz.failures.is_empty()
-        && environment.secret_like_env_vars.is_empty();
+        && environment.secret_like_env_vars.is_empty()
+        && !writable
+        && only_config;
     let verdict = format!(
         "{}: ../../root/.ssh/id_rsa -> {}; app.conf -> {}; {} environment variable(s), {} credential-like; \
-         fuzz: {}.",
+         {} preopen(s), {}; fuzz: {}.",
         if contained { "CONTAINED" } else { "NOT CONTAINED" },
         headline.std_fs.read,
         legitimate.std_fs.read,
         environment.env_vars.len(),
         environment.secret_like_env_vars.len(),
+        environment.preopens.len(),
+        if writable { "WRITABLE" } else { "every write refused" },
         fuzz.line,
     );
     All { verdict, headline, legitimate, environment, fuzz }

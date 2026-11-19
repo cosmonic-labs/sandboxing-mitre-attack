@@ -1,9 +1,11 @@
-//! Path-traversal sandbox demo: the WEB component (Cosmonic Desktop, p3).
+//! Path-traversal sandbox demo: the WEB component (wasi:http p3).
 //!
 //! Serves the branded UI and forwards each request to the SEPARATE `viewer`
 //! component through the host's runtime link:
 //! `viewing::run(mode, name) -> string`. It has NO filesystem and NO network
-//! grants. The browser never talks to the viewer directly, and the requested
+//! grants. Before the first forward it asks the viewer whether the sample files
+//! are in the volume yet (`viewing::run("ready")`) and waits briefly if not: on
+//! an ephemeral volume the unlinked `seeder` service writes them at startup. The browser never talks to the viewer directly, and the requested
 //! file name crosses the component boundary as raw bytes, exactly as received.
 //!
 //! Routes:
@@ -16,7 +18,8 @@
 //!   GET  /run?mode=corpus          -> list the evasion corpus
 //!   GET  /run?mode=fuzz            -> run the whole corpus: "N variants tried, 0 escaped"
 //!                                     (&out=<host path of deploy/volume/outside> adds the
-//!                                     variants that embed it; fuzz/run.py supplies it)
+//!                                     variants that embed it; fuzz/run.py supplies it
+//!                                     on the hostPath deployment)
 //!   GET  /run?mode=env             -> environment variables, preopens, credential-path probes
 //!   GET  /run?mode=all             -> headline + legitimate read + environment + fuzz summary
 //!   GET  /health                   -> "ok"
@@ -56,6 +59,34 @@ use path_link::cosmonic::path_demo::viewing;
 use http_body_util::BodyExt;
 use wasip3::http::types::{ErrorCode, Fields, Method, Request, Response};
 use wasip3::http_compat::{BodyWriter, IncomingRequestBody};
+
+/// Set once the viewer has reported the sample files present. Nothing with
+/// write access is reachable after that point, so the answer cannot change
+/// for the life of this instance.
+static VOLUME_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How long a request waits for the seeder service at cold start.
+const READY_WAIT_STEPS: u32 = 60;
+const READY_WAIT_STEP_NS: u64 = 50_000_000; // 50 ms; 3 s in total
+
+/// Wait until the viewer can see the sample files. A cold-start courtesy only:
+/// after the wait the request is forwarded regardless, and the viewer reports
+/// whatever it really finds.
+async fn wait_for_volume() {
+    use std::sync::atomic::Ordering;
+    if VOLUME_READY.load(Ordering::Relaxed) {
+        return;
+    }
+    for step in 0..=READY_WAIT_STEPS {
+        if viewing::run("ready", &[]).contains("true") {
+            VOLUME_READY.store(true, Ordering::Relaxed);
+            return;
+        }
+        if step < READY_WAIT_STEPS {
+            wasip3::clocks::monotonic_clock::wait_for(READY_WAIT_STEP_NS).await;
+        }
+    }
+}
 
 struct Component;
 
@@ -97,13 +128,17 @@ impl wasip3::exports::http::handler::Guest for Component {
                     "fuzz" => ("fuzz", percent_decode(query_get(&query, "out").unwrap_or(""))),
                     other => (other, Vec::new()),
                 };
+                wait_for_volume().await;
                 json(viewing::run(mode, &name))
             }
 
             // Same as GET /run?mode=read, but the name is the raw request body,
             // so the harness can send bytes and lengths a URL cannot carry.
             (Method::Post, "/run") => match read_request_body(request).await {
-                Ok(name) => json(viewing::run("read", &name)),
+                Ok(name) => {
+                    wait_for_volume().await;
+                    json(viewing::run("read", &name))
+                }
                 Err(e) => respond(
                     400,
                     "application/json; charset=utf-8",

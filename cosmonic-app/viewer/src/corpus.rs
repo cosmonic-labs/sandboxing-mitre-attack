@@ -4,6 +4,21 @@
 /// The corpus file, shared verbatim with the CLI harness.
 pub const CORPUS_TXT: &str = include_str!("../../../fuzz/corpus.txt");
 
+/// The symlink fixtures (`<name> <target>`), shared with `fuzz/plant.sh` and
+/// the seeder component. The viewer only uses the names, to report which
+/// fixtures are missing from the volume it was given.
+pub const LINKS_TXT: &str = include_str!("../../../fuzz/links.txt");
+
+/// Names of the fixture links expected under `links/`.
+pub fn link_names() -> Vec<&'static str> {
+    LINKS_TXT
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_whitespace().next())
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct Variant {
     pub id: usize,

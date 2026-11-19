@@ -1,7 +1,12 @@
 # Durable Workload: the path-traversal sandbox demo (CWE-22, MITRE ATT&CK T1552).
 #
-# ONE workload, TWO components, auto-linked by the host. Each component keeps
-# its OWN capability grants:
+# This is the DEFAULT manifest. Its volume is `ephemeral`, so it needs nothing
+# on the host and runs unchanged on Cosmonic Desktop and on a Cosmonic Control
+# cluster. (The hostPath variant, used by the fuzz harness with a planted
+# canary, is path-traversal-sandbox.fuzz.workload.yaml.)
+#
+# ONE workload, THREE sandboxes: two linked components and one unlinked
+# run-once service. Each keeps its OWN capability grants:
 #
 #   web     exports wasi:http/handler (the UI + entrypoint).
 #           Grants: NONE. No volume (no filesystem), allowedHosts: [] (no network).
@@ -9,17 +14,34 @@
 #           path-traversal bug). Grants: ONE directory, mounted read-only at
 #           /var/app/config. allowedHosts: [] (no network). No HTTP surface:
 #           reachable only through the runtime link from web.
+#   seeder  the workload's `service`: a wasi:cli/run command the host runs once
+#           when the workload starts. Grants: the same volume, mounted
+#           read-WRITE at /seed. allowedHosts: [] (no network). It writes the
+#           inert sample files compiled into it, leaves a summary of what it
+#           did in .seed-report.json (GET /run?mode=seed-report) and exits.
+#           It takes no input and shares NO interface with web or viewer.
 #
 # The browser calls web's /run; web passes the requested file name across the
 # link to viewer; viewer joins it onto /var/app/config (unpatched) and reports
 # what the runtime answered.
 #
-# THE VOLUME. `config` is a hostPath volume: deploy/volume/config in this repo,
-# a directory of inert sample files created for this demo. Never point it at a
-# directory that holds anything real. hostPath needs an ABSOLUTE path, so edit
-# the `path:` below to match your checkout before applying.
+# WHY SEEDER IS A SERVICE AND NOT A LINKED COMPONENT. Components linked through
+# an interface are instantiated in one store, and each then sees the volume
+# mounts of all the others. Measured on Cosmonic Desktop 0.5.33 (runtime
+# 2.12.0): with seeder linked to web, viewer saw a second preopen, /seed, and
+# could create files in it. A service that is linked to nothing gets its own
+# store, and viewer's only preopen is /var/app/config, read-only. Do not turn
+# seeder into something web or viewer imports.
 #
-# Images are in Cosmonic Desktop's built-in registry (oci.localhost:8200).
+# THE VOLUME. `config` is an ephemeral volume: empty when the workload starts,
+# filled by seeder at startup, gone when the workload is deleted. There is
+# nothing outside it for this deployment to plant a canary in; the viewer
+# detects an escape by content (anything not byte-identical to what is inside
+# the volume).
+#
+# Images here are in Cosmonic Desktop's built-in registry (oci.localhost:8200).
+# For a cluster, push the same three components to a registry it can pull from
+# and change the three `image:` lines and the `host:`.
 #
 # Apply: cosmonic_workload_apply(<this file>)  (or the Control equivalent).
 apiVersion: runtime.wasmcloud.dev/v1alpha1
@@ -37,7 +59,7 @@ spec:
     # The UI + HTTP entrypoint. Imports cosmonic:path-demo/viewing (satisfied by
     # the viewer component below, auto-linked). Zero capability grants.
     - name: web
-      image: oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.2@sha256:538108c0f516e3cda46a1b90e8141ed0bcceefadabc857a017d13daf7adb3a38
+      image: oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.4@sha256:40379e592a224b0aa330d20bbc102e62dd414d1df5f41efb99e2930a9a30c009
       poolSize: 8
       localResources:
         allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
@@ -45,7 +67,7 @@ spec:
     # The vulnerable config viewer. Exports cosmonic:path-demo/viewing. Its ONLY
     # authority is the /var/app/config directory, read-only; no network, no HTTP.
     - name: viewer
-      image: oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.1@sha256:5128d1729466c6d0b1b3c44c6f1b7ea8a75ce2b0ab8d0a6f18286cf07e5161ce
+      image: oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.5@sha256:4b3e4ec2963ee8440ddfbd40f6d2d82a63b9921e5d19d54c8c787d0698543764
       poolSize: 1
       localResources:
         allowedHosts: []                  # deny-all egress: a file it read could not leave
@@ -53,14 +75,25 @@ spec:
           - name: config
             mountPath: /var/app/config    # the single preopen
             readOnly: true
+
+  # The seeder: runs once at workload start, fills the volume, exits. The only
+  # thing that can write to the volume; no network, no HTTP, no input, no link.
+  service:
+    name: seeder
+    image: oci.localhost:8200/apps/path-traversal-sandbox-seeder:0.1.2@sha256:609f0ad62e79ed72fe49bf5308be5748adb9c766f3c07beb3e4e0549885dc556
+    maxRestarts: 0
+    localResources:
+      allowedHosts: []                    # deny-all egress
+      volumeMounts:
+        - name: config
+          mountPath: /seed                # the same volume, writable here only
+          readOnly: false
   volumes:
     - name: config
-      hostPath:
-        # EDIT ME: the absolute path of deploy/volume/config in your checkout.
-        path: /Users/liam/source/cosmonic-labs/mitre-attack/demo-path-traversal-sandbox/deploy/volume/config
+      ephemeral: {}
   hostInterfaces:
-    # Binds to the component that exports wasi:http/handler (web). viewer has no
-    # HTTP surface, so routing is unambiguous.
+    # Binds to the component that exports wasi:http/handler (web). viewer and
+    # seeder have no HTTP surface, so routing is unambiguous.
     - namespace: wasi
       package: http
       interfaces: [handler]                          # p3 wasi:http/handler@0.3.0

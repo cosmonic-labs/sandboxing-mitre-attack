@@ -5,6 +5,7 @@ Drives the DEPLOYED config viewer with every variant in corpus.txt and asserts
 that no read or listing ever returns anything from outside the one directory
 the sandbox was given. Standard library only.
 
+    # deploy/path-traversal-sandbox.fuzz.workload.yaml (the hostPath variant)
     fuzz/plant.sh                       # once: plant the symlink fixtures
     python3 fuzz/run.py                 # against Cosmonic Desktop on 127.0.0.1:8200
     python3 fuzz/run.py -v              # print every variant, not just the summary
