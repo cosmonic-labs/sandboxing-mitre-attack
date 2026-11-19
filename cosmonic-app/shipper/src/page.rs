@@ -263,9 +263,9 @@ pub const PAGE: &str = r###"<!doctype html>
         <div class="card ok">
           <div class="role">Component · the log shipper</div>
           <h4>shipper</h4>
-          <div class="host">egress-exfil-sandbox.localhost</div>
+          <div class="host">{{SELF_HOST}}</div>
           <div class="grants">
-            <div class="g-row"><span class="pill g">egress</span><span class="meta">egress-exfil-logsink.localhost</span></div>
+            <div class="g-row"><span class="pill g">egress</span><span class="meta">{{SINK_HOST}}</span></div>
             <div class="g-row"><span class="pill d">egress</span><span class="meta">every other host: refused</span></div>
             <div class="g-row"><span class="pill d">filesystem</span><span class="meta">none: no volume</span></div>
             <div class="g-row"><span class="pill d">sockets</span><span class="meta">not imported</span></div>
@@ -474,3 +474,10 @@ pub const PAGE: &str = r###"<!doctype html>
 </body>
 </html>
 "###;
+
+/// The page for this deployment: its own host (from the request) and the one
+/// allow-listed sink host (from `LOG_SINK_URL`) go into the diagram. Both
+/// values are already reduced to host-name characters by the caller.
+pub fn render(self_host: &str, sink_host: &str) -> String {
+    PAGE.replace("{{SELF_HOST}}", self_host).replace("{{SINK_HOST}}", sink_host)
+}

@@ -19,8 +19,14 @@
 //!   GET /run?mode=fuzz           -> the evasion corpus, summary only
 //!   GET /run?mode=all            -> everything above in one report
 //!   GET /fuzz                    -> the evasion corpus, every result
-//!   GET /probe?authority=<pct>   -> one raw outbound attempt (the CLI harness)
+//!   GET /probe?authority=<pct>   -> one raw outbound attempt (the CLI harness);
+//!                                   &scheme=http|https, default: the sink's
+//!   GET /config                  -> this deployment's own host and its sink
 //!   GET /corpus.txt              -> the corpus compiled into this build
+//!
+//! Nothing here names a deployment. The page shows the host the request came
+//! in on and the sink host from `LOG_SINK_URL`, and the fuzz builds its
+//! "allowed host" variants from that same URL, so one image serves any host.
 //!   GET /health                  -> "ok"
 
 mod egress;
@@ -53,6 +59,7 @@ impl wasip3::exports::http::handler::Guest for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         let method = request.get_method();
         let path_q = request.get_path_with_query().unwrap_or_default();
+        let self_host = request_host(&request);
         drop(request);
         let (path, query) = match path_q.split_once('?') {
             Some((p, q)) => (p, q),
@@ -63,7 +70,23 @@ impl wasip3::exports::http::handler::Guest for Component {
         }
 
         match path {
-            "/" | "" => respond(200, "text/html; charset=utf-8", page::PAGE.as_bytes().to_vec()),
+            "/" | "" => {
+                let sink = fuzz::Sink::from_url(&sink_url());
+                let html = page::render(&self_host, &display_host(&sink.host));
+                respond(200, "text/html; charset=utf-8", html.into_bytes())
+            }
+            "/config" => {
+                let url = sink_url();
+                let sink = fuzz::Sink::from_url(&url);
+                let body = serde_json::json!({
+                    "self_host": self_host,
+                    "sink_url": url,
+                    "sink_scheme": sink.scheme(),
+                    "sink_host": sink.host,
+                    "sink_authority": sink.authority(),
+                });
+                respond(200, JSON, body.to_string().into_bytes())
+            }
             "/health" => respond(200, TEXT, b"ok\n".to_vec()),
             "/run" => {
                 let mode = query_param(query, "mode").unwrap_or_else(|| "exfil".to_string());
@@ -71,7 +94,7 @@ impl wasip3::exports::http::handler::Guest for Component {
                 respond(200, JSON, report.to_string().into_bytes())
             }
             "/fuzz" => {
-                let report = fuzz::run(true).await;
+                let report = fuzz::run(true, &fuzz::Sink::from_url(&sink_url())).await;
                 respond(200, JSON, report.to_string().into_bytes())
             }
             "/probe" => {
@@ -80,8 +103,14 @@ impl wasip3::exports::http::handler::Guest for Component {
                     return respond(400, JSON, body.to_string().into_bytes());
                 };
                 let path = query_param(query, "path").unwrap_or_else(|| "/collect".to_string());
+                // The scheme follows the configured sink unless the caller says.
+                let https = match query_param(query, "scheme").as_deref() {
+                    Some("https") => true,
+                    Some("http") => false,
+                    _ => fuzz::Sink::from_url(&sink_url()).https,
+                };
                 let attempt =
-                    egress::post(false, &authority, &path, b"egress-exfil-sandbox fuzz probe (inert)\n".to_vec())
+                    egress::post(https, &authority, &path, b"egress-exfil-sandbox fuzz probe (inert)\n".to_vec())
                         .await;
                 respond(200, JSON, attempt.to_json().to_string().into_bytes())
             }
@@ -91,6 +120,36 @@ impl wasip3::exports::http::handler::Guest for Component {
             "/favicon.svg" => respond(200, "image/svg+xml; charset=utf-8", FAVICON_SVG.to_vec()),
             _ => respond(404, TEXT, b"not found\n".to_vec()),
         }
+    }
+}
+
+/// The host this request came in on, without its port: the request's
+/// authority, or its `Host` header.
+fn request_host(request: &Request) -> String {
+    let authority = request.get_authority().filter(|a| !a.is_empty()).or_else(|| {
+        request
+            .get_headers()
+            .get("host")
+            .into_iter()
+            .next()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+    });
+    let (host, _port) = fuzz::split_host_port(&authority.unwrap_or_default());
+    display_host(&host)
+}
+
+/// A host name made safe to put in the page: the request host is whatever the
+/// client sent, so keep only characters a host name can have.
+fn display_host(host: &str) -> String {
+    let clean: String = host
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'))
+        .take(253)
+        .collect();
+    if clean.is_empty() {
+        "this host".to_string()
+    } else {
+        clean
     }
 }
 
@@ -182,7 +241,8 @@ async fn run(mode: &str) -> serde_json::Value {
         rows.push(row);
     }
 
-    let fuzz_summary = if want("fuzz") { Some(fuzz::run(false).await) } else { None };
+    let fuzz_summary =
+        if want("fuzz") { Some(fuzz::run(false, &fuzz::Sink::from_url(&sink)).await) } else { None };
     let fuzz_escaped = fuzz_summary
         .as_ref()
         .and_then(|f| f.get("escaped"))

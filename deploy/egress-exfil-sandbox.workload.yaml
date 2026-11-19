@@ -31,13 +31,16 @@ metadata:
 spec:
   components:
     - name: shipper
-      image: oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.2@sha256:e969679a05e4a7c2eb97ee0232d0c40b5c09eaece0f1c685a7cca57d46ddfe63
+      image: oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.3@sha256:9b90b7704e0f2ff4f400d0bcccf8859507e8511246b63a4e0f1c5e1f4ddefd6f
       poolSize: 8
       localResources:
         environment:
           config:
             # Where the shipper sends logs when nothing hijacks it. Not a
             # grant: reaching it still depends on allowedHosts below.
+            # http:// or https://. The page and the fuzz corpus take the
+            # allow-listed host from this URL, so keep its host and the
+            # allowedHosts entry the same when you deploy somewhere else.
             LOG_SINK_URL: http://egress-exfil-logsink.localhost:8200/ingest
         # The egress allow-list. Hostname only, exact match. Everything else,
         # including the attacker host, is refused by the runtime.

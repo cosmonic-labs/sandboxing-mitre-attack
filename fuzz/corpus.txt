@@ -10,9 +10,35 @@
 # normalises it first: the runtime is the only parser between this string and
 # the wire.
 #
-# The allow-list under test is exactly one entry:
+# The allow-list under test is exactly one entry: the host of the shipper's
+# configured sink (LOG_SINK_URL). On Cosmonic Desktop that is
 #
 #     allowedHosts: ["egress-exfil-logsink.localhost"]
+#
+# The corpus does not hardcode that name. Every variant built from the
+# allow-listed host is written with a placeholder, and both the component and
+# fuzz/run.py fill it in from the live LOG_SINK_URL before sending, so the same
+# corpus tests whatever host a deployment actually allow-lists. Every request
+# is sent with the sink URL's scheme (http or https).
+#
+#     {host}                 the sink's hostname
+#     {:port}                ":PORT" if LOG_SINK_URL names a port, else nothing
+#     {port}                 the port number in effect (named, else 80 or 443)
+#     {host:upper}           upper-cased
+#     {host:mixed}           first letter of every word upper-cased
+#     {host:fullwidth}       first character as its fullwidth form
+#     {host:ideodot}         first dot as U+3002
+#     {host:percent}         first character percent-encoded
+#     {host:label}           the first label alone
+#     {host:parent}          everything after the first label
+#     {host:truncated}       first label with its last letter removed
+#     {host:homoglyph}       last i (else a, e, o, c, p) of the first label as
+#                            its Cyrillic look-alike
+#     {host:homoglyph-puny}  that label in punycode (xn--)
+#
+# A variant whose placeholder cannot be built for the configured host (no dot,
+# no letter to swap), or that comes out identical to the allow-listed host, is
+# skipped and counted as skipped, never as tried.
 #
 # Classes and what the harness asserts:
 #
@@ -33,12 +59,12 @@
 # and exfil.attacker.example (.example, RFC 2606, never resolves).
 
 # --- control ---------------------------------------------------------------
-control     egress-exfil-logsink.localhost:8200                      exact                 the one allow-listed host, on the ingress port
+control     {host}{:port}                                            exact                 the one allow-listed host, exactly as LOG_SINK_URL names it
 
 # --- the attacker destination, spelled every way ---------------------------
 attacker    203.0.113.66                                             ipv4-dotted           plain IPv4 literal
 attacker    203.0.113.66:80                                          ipv4-port             explicit default port
-attacker    203.0.113.66:8200                                        ipv4-ingress-port     same port as the allow-listed host
+attacker    203.0.113.66:8200                                        ipv4-ingress-port     the attacker IP on Cosmonic Desktop's ingress port
 attacker    3405803842                                               ipv4-decimal          203.0.113.66 as one decimal integer
 attacker    0xcb007142                                               ipv4-hex              as one hex integer
 attacker    0xcb.0x0.0x71.0x42                                       ipv4-hex-dotted       each octet in hex
@@ -67,30 +93,30 @@ attacker    \x20exfil.attacker.example                               domain-lead
 attacker    exfil.attacker.example\x09                               domain-trailing-tab   trailing tab
 
 # --- confusables: the allow-listed name used as camouflage ------------------
-confusable  egress-exfil-logsink.localhost@203.0.113.66              userinfo              allow-listed name as userinfo; host is the attacker
-confusable  egress-exfil-logsink.localhost:8200@203.0.113.66         userinfo-port         name:port as user:password
-confusable  egress-exfil-logsink.localhost:8200@exfil.attacker.example userinfo-domain     the same, attacker domain
-confusable  egress-exfil-logsink.localhost%40203.0.113.66            userinfo-percent      percent-encoded @
-confusable  203.0.113.66#@egress-exfil-logsink.localhost             fragment-at           fragment hides the allow-listed tail
-confusable  203.0.113.66?@egress-exfil-logsink.localhost             query-at              query hides the allow-listed tail
-confusable  203.0.113.66\x5c@egress-exfil-logsink.localhost          backslash-at          backslash parser differential
-confusable  egress-exfil-logsink.localhost.attacker.example          suffix-domain         allow-listed name as a subdomain of the attacker
-confusable  egress-exfil-logsink.localhost.203.0.113.66              suffix-ip             allow-listed name prefixed to the attacker IP
-confusable  attacker.egress-exfil-logsink.localhost                  subdomain             a subdomain of the allow-listed name (no wildcard granted)
-confusable  evil-egress-exfil-logsink.localhost                      prefix                allow-listed name as a suffix of another label
-confusable  egress-exfil-logsink.localhost-attacker.example          hyphen-suffix         allow-listed name as a label prefix
-confusable  egress-exfil-logsink.localhostx                          tld-suffix            one extra letter on the TLD
-confusable  egress-exfil-logsink.localhos                            tld-truncated         one letter short
-confusable  egress-exfil-logsink                                     bare-label            the first label alone
-confusable  localhost                                                parent                the parent name only
-confusable  egress-exfil-logsіnk.localhost                           homoglyph             Cyrillic U+0456 for "i"
-confusable  xn--egress-exfil-logsnk-wbq.localhost                    homoglyph-punycode    the homoglyph label in punycode
-confusable  egress-exfil-logsink.localhost\x00.attacker.example      nul-byte              NUL truncation
-confusable  egress-exfil-logsink.localhost\x0d\x0aHost:\x20203.0.113.66 crlf-injection     header injection through the authority
-confusable  egress-exfil-logsink.localhost\x20203.0.113.66           space-split           space-separated second host
-confusable  egress-exfil-logsink.localhost,203.0.113.66              comma-list            comma-separated host list
-confusable  egress-exfil-logsink.localhost;203.0.113.66              semicolon-list        semicolon-separated host list
-confusable  egress-exfil-logsink.localhost/@203.0.113.66             slash-at              path separator inside the authority
+confusable  {host}@203.0.113.66                                      userinfo              allow-listed name as userinfo; host is the attacker
+confusable  {host}:{port}@203.0.113.66                               userinfo-port         name:port as user:password
+confusable  {host}:{port}@exfil.attacker.example                     userinfo-domain       the same, attacker domain
+confusable  {host}%40203.0.113.66                                    userinfo-percent      percent-encoded @
+confusable  203.0.113.66#@{host}                                     fragment-at           fragment hides the allow-listed tail
+confusable  203.0.113.66?@{host}                                     query-at              query hides the allow-listed tail
+confusable  203.0.113.66\x5c@{host}                                  backslash-at          backslash parser differential
+confusable  {host}.attacker.example                                  suffix-domain         allow-listed name as a subdomain of the attacker
+confusable  {host}.203.0.113.66                                      suffix-ip             allow-listed name prefixed to the attacker IP
+confusable  attacker.{host}                                          subdomain             a subdomain of the allow-listed name (no wildcard granted)
+confusable  evil-{host}                                              prefix                allow-listed name as a suffix of another label
+confusable  {host}-attacker.example                                  hyphen-suffix         allow-listed name as a label prefix
+confusable  {host}x                                                  tld-suffix            one extra letter on the TLD
+confusable  {host:truncated}                                         label-truncated       the first label one letter short
+confusable  {host:label}                                             bare-label            the first label alone
+confusable  {host:parent}                                            parent                the parent name only
+confusable  {host:homoglyph}                                         homoglyph             a Cyrillic look-alike for one letter of the first label
+confusable  {host:homoglyph-puny}                                    homoglyph-punycode    the homoglyph label in punycode
+confusable  {host}\x00.attacker.example                              nul-byte              NUL truncation
+confusable  {host}\x0d\x0aHost:\x20203.0.113.66                      crlf-injection        header injection through the authority
+confusable  {host}\x20203.0.113.66                                   space-split           space-separated second host
+confusable  {host},203.0.113.66                                      comma-list            comma-separated host list
+confusable  {host};203.0.113.66                                      semicolon-list        semicolon-separated host list
+confusable  {host}/@203.0.113.66                                     slash-at              path separator inside the authority
 
 # --- SSRF targets -----------------------------------------------------------
 ssrf        169.254.169.254                                          metadata-ipv4         cloud instance metadata service
@@ -110,13 +136,13 @@ ssrf        oci.localhost:8200                                       sibling-loc
 ssrf        [fe80::1]                                                link-local-ipv6       IPv6 link-local
 
 # --- equivalents: other spellings of the allow-listed host ------------------
-equivalent  EGRESS-EXFIL-LOGSINK.LOCALHOST:8200                      uppercase             case folding of the allow-listed name
-equivalent  Egress-Exfil-LogSink.Localhost:8200                      mixed-case            mixed case
-equivalent  egress-exfil-logsink.localhost.:8200                     trailing-dot          fully-qualified trailing dot
-equivalent  ｅgress-exfil-logsink.localhost:8200                      fullwidth             fullwidth first letter (UTS-46 maps it to ASCII)
-equivalent  egress-exfil-logsink。localhost:8200                      ideographic-dot       U+3002 as the label separator
-equivalent  egress-exfil-logsink.localhost:08200                     port-leading-zero     leading zero on the port
-equivalent  %65gress-exfil-logsink.localhost:8200                    percent               percent-encoded first letter
+equivalent  {host:upper}{:port}                                      uppercase             case folding of the allow-listed name
+equivalent  {host:mixed}{:port}                                      mixed-case            mixed case
+equivalent  {host}.{:port}                                           trailing-dot          fully-qualified trailing dot
+equivalent  {host:fullwidth}{:port}                                  fullwidth             fullwidth first letter (UTS-46 maps it to ASCII)
+equivalent  {host:ideodot}{:port}                                    ideographic-dot       U+3002 as the label separator
+equivalent  {host}:0{port}                                           port-leading-zero     leading zero on the sink's port
+equivalent  {host:percent}{:port}                                    percent               percent-encoded first letter
 
 # --- the allow-listed host on another port ----------------------------------
-byport      egress-exfil-logsink.localhost:9                         other-port            the discard port: nothing listens there
+byport      {host}:9                                                 other-port            the discard port: nothing listens there

@@ -1,7 +1,7 @@
 [package]
 name = "egress-exfil-shipper"
 edition = "2021"
-version = "0.1.2"
+version = "0.1.3"
 # p3 build floor: wasip3's component-type section needs wasm-component-ld
 # >= 0.5.20 (bundled with Rust >= 1.94).
 rust-version = "1.94"

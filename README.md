@@ -28,7 +28,7 @@ every result is the runtime's own answer. Nothing is simulated.
 | **Exfiltrate to attacker domain** | CWE-610 / CWE-918 · T1041 | The same hijack aimed at `exfil.attacker.example`, a name instead of an address (647 bytes). | Refused: `ErrorCode::HttpRequestDenied`. 0 bytes reach the attacker. |
 | **Run evasion fuzz** | [CWE-183](https://cwe.mitre.org/data/definitions/183.html) / [CWE-184](https://cwe.mitre.org/data/definitions/184.html) · allow-list bypass | 77 spellings from [`fuzz/corpus.txt`](fuzz/corpus.txt): decimal, hex and octal IPs, IPv6-mapped, `user@host`, punycode, trailing dots, CRLF, metadata and loopback targets. | `77 variants tried, 0 escaped`. All 68 hostile variants refused; the one exact allow-list entry connects. |
 | **Run all** | all of the above | Both exfiltration attempts, the legitimate send and the fuzz, in one report. | 2 of 2 refused, the sink answers 200, 0 of 77 escaped. |
-| **Send to allowed host** | none: the legitimate path | A clean batch (243 bytes of logs, no workspace) goes to the configured sink, `egress-exfil-logsink.localhost`. | Delivered: HTTP 200, the sink's receipt comes back. |
+| **Send to allowed host** | none: the legitimate path | A clean batch (243 bytes of logs, no workspace) goes to the configured sink (`LOG_SINK_URL`; `egress-exfil-logsink.localhost` on Desktop). | Delivered: HTTP 200, the sink's receipt comes back. |
 
 The attacker destinations are `203.0.113.66` (TEST-NET-3, [RFC 5737](https://www.rfc-editor.org/rfc/rfc5737), never
 routed) and `exfil.attacker.example` (`.example`, [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606), never
@@ -80,7 +80,8 @@ does not connect, which is correct for that manifest).
 | Send to allowed host | `/run?mode=allowed` | `DELIVERED: the allow-listed sink egress-exfil-logsink.localhost:8200 answered HTTP 200.` |
 | Run evasion fuzz | `/run?mode=fuzz` (summary) or `/fuzz` (every result) | `MITIGATED: evasion fuzz: 77 variants tried, 0 escaped.` |
 | Run all | `/run?mode=all` | `MITIGATED: 2 exfiltration attempts made, 2 refused by the runtime (ErrorCode::HttpRequestDenied), 0 bytes reached the attacker; the allow-listed sink egress-exfil-logsink.localhost:8200 answered HTTP 200; evasion fuzz: 77 variants tried, 0 escaped.` |
-| One raw attempt | `/probe?authority=<percent-encoded>` | the attempt object below, for any authority you like |
+| One raw attempt | `/probe?authority=<percent-encoded>` | the attempt object below, for any authority you like (`&scheme=http\|https`; default: the sink's) |
+| This deployment | `/config` | its own host, and the sink URL, scheme and host the page and the fuzz are built from |
 
 ```bash
 B=http://127.0.0.1:8200; H='Host: egress-exfil-sandbox.localhost'
@@ -139,6 +140,15 @@ check is on the request's authority, before any name lookup or connection.
 the runtime byte for byte as the request authority: the component builds the request on the raw
 `wasi:http` resource, with no client-side URL parser in between to tidy an evasion attempt up.
 
+The corpus does not hardcode the allow-listed host. The 33 variants built from it (the control,
+the 24 confusables that use the name as camouflage, the 7 equivalents and the other-port line) are
+written with placeholders such as `{host}`, `{host:upper}` and `{host:homoglyph-puny}`, and both
+the component and `fuzz/run.py` fill them in from the deployment's `LOG_SINK_URL` before sending.
+Every request uses that URL's scheme. So the same image and the same corpus test
+`egress-exfil-logsink.localhost` on Desktop and whatever host another deployment allow-lists; the
+header of `corpus.txt` lists the placeholders. A variant that cannot be built for a given host is
+skipped and reported as skipped.
+
 | Class | Count | What it is | Assertion |
 |---|---|---|---|
 | `control` | 1 | the exact allow-listed host | must connect with HTTP 200 |
@@ -160,9 +170,10 @@ Two ways to run it, over the same corpus:
   `corpus.txt`, drives the *deployed* component through `/probe` one variant at a time, applies the
   assertions itself, cross-checks the component's own `/fuzz` count and exits non-zero on any escape.
 
-Result against the live deployment (Cosmonic Desktop 0.5.32, runtime 2.12.0):
+Result against the live deployment (Cosmonic Desktop 0.5.33, runtime 2.12.0, shipper `0.1.3`):
 
 ```
+allowed host: egress-exfil-logsink.localhost (sink http://egress-exfil-logsink.localhost:8200/ingest)
 77 variants tried, 0 escaped
   must-refuse variants: 68, refused: 68 | denied by policy: 50 | rejected as malformed: 22 | connected: 4 | passed policy then failed: 1
   control: 1 of 1 connected with HTTP 200
@@ -204,8 +215,14 @@ allow-list. Recorded for completeness, because they describe how the check behav
   `.localhost` names) are all refused. In production, allow-list names that resolve off-host. This
   is flagged for upstream discussion as a hardening question, not as a bypass: the operator granted
   the name.
-- **Not tested:** DNS rebinding (an allow-listed public name whose record points at a private or
-  loopback address), redirects from an allow-listed host, HTTPS and SNI/Host mismatches, and
+- **An `https://` sink works.** With `LOG_SINK_URL` temporarily pointed at a public HTTPS host
+  that was allow-listed for the test, the allowed send returned HTTP 200 with and without an
+  explicit `:443`, and the same request aimed at port 80 failed with `ErrorCode::TlsProtocolError`:
+  the scheme is taken from the URL and the host really does speak TLS. Checked on Desktop 0.5.33
+  only, and only for the allowed send. The fuzz was not run against a third-party host.
+- **Not tested:** the corpus against a non-`.localhost` or HTTPS sink (the Desktop deployment is the
+  only one it has run on), DNS rebinding (an allow-listed public name whose record points at a
+  private or loopback address), redirects from an allow-listed host, SNI/Host mismatches, and
   authorities that are not valid UTF-8 (a WIT `string` cannot carry them).
 
 ## The long tail this boundary also covers
@@ -283,7 +300,7 @@ cd ../logsink           && wash build
 cd ..
 
 # publish to Desktop's built-in registry (bump the tag on every rebuild)
-wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.2 \
+wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.3 \
   shipper/target/wasm32-wasip2/release/egress_exfil_shipper.wasm
 wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-logsink:0.1.0 \
   logsink/target/wasm32-wasip2/release/egress_exfil_logsink.wasm

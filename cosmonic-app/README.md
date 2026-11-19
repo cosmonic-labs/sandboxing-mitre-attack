@@ -58,6 +58,10 @@ reject or normalise half the corpus before the runtime ever saw it.
 - `GET /run?mode=exfil|domain|allowed|fuzz|all`: the JSON verdict.
 - `GET /fuzz`: the compiled-in corpus, every result.
 - `GET /probe?authority=<percent-encoded>&path=<path>`: one raw outbound attempt; what `fuzz/run.py` drives.
+  `&scheme=http|https` picks the scheme; the default is the configured sink's.
+- `GET /config`: the host this request came in on and the configured sink (`LOG_SINK_URL`). The page
+  diagram and the fuzz corpus's "allowed host" variants are built from these, so nothing in the
+  image names a deployment.
 - `GET /corpus.txt`: the corpus this build was compiled with.
 
 `/probe` will try any authority you give it. That is safe to expose for the same reason the demo
@@ -87,7 +91,7 @@ implicit and gated only by `allowedHosts`.
 (cd shipper && wash build)
 (cd logsink && wash build)
 # push (bump the tag on every rebuild)
-wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.2 shipper/target/wasm32-wasip2/release/egress_exfil_shipper.wasm
+wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.3 shipper/target/wasm32-wasip2/release/egress_exfil_shipper.wasm
 wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-logsink:0.1.0 logsink/target/wasm32-wasip2/release/egress_exfil_logsink.wasm
 # apply (update the digests in the manifests first), sink first:
 #   cosmonic_workload_apply(../deploy/egress-exfil-logsink.workload.yaml)
