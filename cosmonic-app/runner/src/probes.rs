@@ -25,8 +25,8 @@ const WHY_NO_PROC: &str = "No filesystem was granted, and /proc is a kernel view
 table. A component is not a process with a view of the host's: there is no /proc to mount.";
 const WHY_NO_SECRETS: &str = "No filesystem was granted. A pod gets its service-account token \
 as a projected volume; this workload declares no volumes, so no token is ever placed in reach.";
-const WHY_NO_ENV: &str = "The workload passes no environment: the component sees only what \
-the manifest's localResources.environment lists, and it lists nothing.";
+const WHY_NO_ENV: &str = "A component does not inherit the host's environment: it sees only \
+what the workload's localResources.environment lists, and this workload lists nothing.";
 const WHY_NO_PROCESS: &str = "WASI has no interface that starts a process. There is no fork, \
 no exec and no $PATH, so there is no docker, kubectl, nsenter or shell to run.";
 const WHY_NO_EGRESS: &str = "The only network path this component imports is the host's \

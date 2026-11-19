@@ -31,7 +31,7 @@ metadata:
 spec:
   components:
     - name: runner
-      image: oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.2@sha256:01bd275517fe08d5af9c7d41394fb8b1f557d9f9448e2872fb7f01f143309d59
+      image: oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.3@sha256:7e3f2f8ebdd90a6d47080b63394868d88ce50b348b95f30976d74ec2464f578a
       poolSize: 8
       localResources:
         allowedHosts: []   # deny-all egress; no volume = zero filesystem authority

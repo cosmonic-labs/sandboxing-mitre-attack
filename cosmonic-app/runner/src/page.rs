@@ -250,7 +250,7 @@ pub const PAGE: &str = r###"<!doctype html>
         <div class="card ok">
           <div class="role">CI runner · UI · entrypoint</div>
           <h4>runner</h4>
-          <div class="host">container-escape-sandbox.localhost</div>
+          <div class="host">{{SELF_HOST}}</div>
           <div class="grants">
             <div class="g-row"><span class="pill g">http in</span><span class="meta">this page and /run</span></div>
             <div class="g-row"><span class="pill d">filesystem</span><span class="meta">no volume: no /var/run, no /proc, no token</span></div>
@@ -391,3 +391,9 @@ pub const PAGE: &str = r###"<!doctype html>
 </body>
 </html>
 "###;
+
+/// The page for this deployment: the host the request came in on goes into the
+/// diagram. The caller has already reduced it to host-name characters.
+pub fn render(self_host: &str) -> String {
+    PAGE.replace("{{SELF_HOST}}", self_host)
+}

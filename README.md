@@ -62,7 +62,7 @@ through.
    ```bash
    cd cosmonic-app/runner
    wash build
-   wash oci push --insecure oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.2 \
+   wash oci push --insecure oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.3 \
      target/wasm32-wasip2/release/container_escape_runner.wasm
    ```
 
@@ -97,7 +97,7 @@ MITIGATED: 14 of 14 attempts failed. The poisoned job ran, but the sandbox has n
 open, no token to read, no client to start and no route to a runtime API.
 ```
 
-`mode=docker`, captured from the running workload (image `0.1.2`; each step's `why` text and the
+`mode=docker`, captured from the running workload (image `0.1.3`; each step's `why` text and the
 full import list are trimmed here for width, see below):
 
 ```json
@@ -170,7 +170,7 @@ one inbound HTTP route, no volumes, no outbound hosts.
 ### What the component imports
 
 `cosmonic_image_inspect` on the published image
-(`oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.2@sha256:01bd2755…`) reports these
+(`oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.3@sha256:7e3f2f8e…`) reports these
 imports, and `cosmonic_workload_get` reports the same list for the running component:
 
 ```
@@ -311,7 +311,7 @@ the image is signed and published to a registry the cluster can pull from, and t
 
 ## Status
 
-Built, deployed on Cosmonic Desktop 0.5.32 and verified live: the page returns 200, and
+Built, deployed on Cosmonic Desktop 0.5.33 and verified live: the page returns 200, and
 `/run?mode=docker`, `kube` and `all` return 7 of 7, 7 of 7 and 14 of 14 attempts failed. Notes:
 
 - The image is in Desktop's local registry only. It is not published to ghcr, so the quickstart

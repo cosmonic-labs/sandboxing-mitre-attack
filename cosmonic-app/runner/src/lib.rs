@@ -1,4 +1,5 @@
-//! Container-escape sandbox demo: the RUNNER component (Cosmonic Desktop, p3).
+//! Container-escape sandbox demo: the RUNNER component (wasi:http p3; runs on
+//! Cosmonic Desktop and on Cosmonic Control alike).
 //! MITRE ATT&CK T1609 (Container Administration Command) and T1610 (Deploy
 //! Container), contained.
 //!
@@ -19,7 +20,7 @@
 //! filesystem, no sockets, no process spawn, no outbound hosts.
 //!
 //! Routes:
-//!   GET /                  -> the UI
+//!   GET /                  -> the UI (the diagram shows the host the request came in on)
 //!   GET /run?mode=docker   -> the docker.sock job (default)
 //!   GET /run?mode=kube     -> the kubelet / Kubernetes API job
 //!   GET /run?mode=all      -> both jobs in one report
@@ -97,6 +98,7 @@ impl wasip3::exports::http::handler::Guest for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         let method = request.get_method();
         let path_q = request.get_path_with_query().unwrap_or_default();
+        let self_host = request_host(&request);
         drop(request);
         let (path, query) = match path_q.split_once('?') {
             Some((p, q)) => (p, q),
@@ -107,7 +109,7 @@ impl wasip3::exports::http::handler::Guest for Component {
         }
 
         match path {
-            "/" | "" => respond(200, "text/html; charset=utf-8", page::PAGE.as_bytes().to_vec()),
+            "/" | "" => respond(200, "text/html; charset=utf-8", page::render(&self_host).into_bytes()),
             "/health" => respond(200, TEXT, b"ok\n".to_vec()),
             "/run" => {
                 let mode = query_param(query, "mode").unwrap_or("docker");
@@ -130,6 +132,36 @@ impl wasip3::exports::http::handler::Guest for Component {
             "/favicon.svg" => respond(200, "image/svg+xml; charset=utf-8", FAVICON_SVG.to_vec()),
             _ => respond(404, TEXT, b"not found\n".to_vec()),
         }
+    }
+}
+
+/// The host this request came in on, without its port: the request's
+/// authority, or its `Host` header. It goes into the page, and it is whatever
+/// the client sent, so only characters a host name can have are kept.
+fn request_host(request: &Request) -> String {
+    let authority = request.get_authority().filter(|a| !a.is_empty()).or_else(|| {
+        request
+            .get_headers()
+            .get("host")
+            .into_iter()
+            .next()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+    });
+    let authority = authority.unwrap_or_default();
+    // Only a trailing all-digit part is a port (leaves a bare IPv6 literal whole).
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => authority.as_str(),
+    };
+    let clean: String = host
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'))
+        .take(253)
+        .collect();
+    if clean.is_empty() {
+        "this host".to_string()
+    } else {
+        clean
     }
 }
 
