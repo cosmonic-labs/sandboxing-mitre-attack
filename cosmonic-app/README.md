@@ -30,11 +30,13 @@ hard-coded; the summary strings are computed from the results.
 Every probe is capped inside the component, whatever the platform does:
 
 - **CPU:** `CPU_BUDGET_MS = 3000`. No request hashes for longer, and `?ms=` can only lower it.
-- **Memory:** `MEMORY_CEILING_MB = 256`. Growth stops there if the runtime has not refused first.
+- **Memory:** `MEMORY_CEILING_MB = 64`. Growth stops there if the runtime has not refused first. It
+  is deliberately above the manifest's `memoryLimitMb: 32`, so a host that enforces the declared
+  limit shows up as `stopped_by: platform`, and small enough for a shared host.
 - **Idle and heartbeat:** 120 s at most, and neither uses CPU.
 
 Each result carries `stopped_by`, which is `in-component cap` or `platform`. On Cosmonic Desktop
-0.5.32 it was `in-component cap` every time for CPU and memory. The top-level
+0.5.33 it was `in-component cap` every time for CPU and memory. The top-level
 [README](../README.md#contained-not-removed) has the full table of what was and was not enforced.
 
 ### How background work is observed
@@ -73,7 +75,7 @@ interface, no `wasi:sockets`, no filesystem preopen.
 cd miner
 wash build
 # push (bump the tag on every rebuild)
-wash oci push --insecure oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.2 \
+wash oci push --insecure oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.3 \
   target/wasm32-wasip2/release/resource_hijack_miner.wasm
 # apply (update the digest in the manifest first):
 #   cosmonic_workload_apply(../deploy/resource-hijack-sandbox.workload.yaml)

@@ -8,15 +8,18 @@
 #           "pool", and tries to keep working after the request.
 #           Grants: NONE. No volume, allowedHosts: [].
 #
-# What each line below did when measured on Cosmonic Desktop 0.5.32
-# (runtime 2.12.0, macOS/aarch64). See README, "Contained, not removed":
+# What each line below did when measured on Cosmonic Desktop 0.5.33
+# (runtime 2.12.0, macOS/aarch64). See README, "Contained, not removed".
+# Not measured on a Cosmonic Control cluster:
 #
 #   allowedHosts: []    ENFORCED. Both pool dials came back HttpRequestDenied.
 #   maxInvocations: 1   ENFORCED. Every request got a fresh instance; grown
 #                       memory and background work ended with the request.
-#   memoryLimitMb: 64   NOT ENFORCED on this host. The component grew to its
-#                       own 256 MiB ceiling. Kept here as the declared intent.
-#   cpuLimit: 1         NO OBSERVABLE EFFECT on this host. A component is
+#   memoryLimitMb: 32   NOT ENFORCED on Desktop. The component grew to its
+#                       own 64 MiB ceiling. Kept here as the declared intent,
+#                       and set below that ceiling on purpose: where a host
+#                       does enforce it, the probes report stopped_by: platform.
+#   cpuLimit: 1         NO OBSERVABLE EFFECT on Desktop. A component is
 #                       single-threaded already; the loop ran at full
 #                       single-core speed and nothing interrupted it.
 #
@@ -37,15 +40,15 @@ metadata:
 spec:
   components:
     - name: miner
-      image: oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.2@sha256:1471398fa1e12bdebf56118117d6c434e0b588a133578650aa04143ece08c308
+      image: oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.3@sha256:9ef3eb8cf0ea665d26061c5196a06fe3e956ba95b7e67e5f08df20b59e07619a
       # Lifecycle: one warm instance, retired after ONE request. This is the
       # control that reaps the miner. Nothing the component did (grown memory,
       # a task left running after the response) outlives its request.
       poolSize: 1
       maxInvocations: 1
       localResources:
-        memoryLimitMb: 64   # declared; not enforced on Desktop 0.5.32 (see above)
-        cpuLimit: 1         # declared; no observable effect on Desktop 0.5.32
+        memoryLimitMb: 32   # declared, below the 64 MiB in-component ceiling (see above)
+        cpuLimit: 1         # declared; no observable effect on Desktop
         allowedHosts: []    # deny-all egress; no volume = zero filesystem authority
   hostInterfaces:
     - namespace: wasi

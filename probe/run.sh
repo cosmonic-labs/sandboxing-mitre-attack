@@ -14,7 +14,7 @@
 # Sequential on purpose: one request per variant, no parallelism, no load.
 #
 #   probe/run.sh                      # against Cosmonic Desktop on 127.0.0.1:8200
-#   MEMORY_LIMIT_MB=64 probe/run.sh   # also hold memory to a declared limit
+#   MEMORY_LIMIT_MB=32 probe/run.sh   # also hold memory to a declared limit
 #   BASE=https://host HOST=name probe/run.sh
 #
 # Exit status: 0 if no variant exceeded the budget, 1 otherwise.

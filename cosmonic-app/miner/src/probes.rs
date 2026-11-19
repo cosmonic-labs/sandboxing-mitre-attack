@@ -28,8 +28,9 @@ use std::time::Instant;
 
 /// Hard cap on CPU-bound hashing per request, in milliseconds of wall clock.
 pub const CPU_BUDGET_MS: u64 = 3_000;
-/// Hard cap on linear-memory growth, in MiB.
-pub const MEMORY_CEILING_MB: usize = 256;
+/// Hard cap on linear-memory growth, in MiB. Kept small on purpose: the demo
+/// also runs on a shared host, where one component's memory is everyone's.
+pub const MEMORY_CEILING_MB: usize = 64;
 /// One WebAssembly page.
 const PAGE: usize = 65_536;
 const PAGES_PER_MB: usize = 16;

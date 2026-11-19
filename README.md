@@ -25,18 +25,20 @@ pool client, no wallet and no difficulty target in this repo. The "pool" is `203
 ## The scenarios
 
 The demo page has one button per scenario. Every attempt is really made inside the component, and
-the answer shown is the one that came back. Measured on Cosmonic Desktop 0.5.32 (runtime 2.12.0,
-macOS/aarch64) with the manifest in [`deploy/`](deploy/resource-hijack-sandbox.workload.yaml).
+the answer shown is the one that came back. Measured on Cosmonic Desktop 0.5.33 (runtime 2.12.0,
+macOS/aarch64) with the manifest in [`deploy/`](deploy/resource-hijack-sandbox.workload.yaml) and
+image `0.1.3`. The same image is also served from a shared Cosmonic Control cluster; nothing below
+was measured there, and the page prints that host's own answers (see [Status](#status)).
 
 | Button | Technique (ATT&CK / CWE-400) | What the attack does | In the sandbox |
 |---|---|---|---|
-| **Start miner** | [T1496](https://attack.mitre.org/techniques/T1496/) Resource Hijacking | Dials the pool, starts 8 worker threads and 3 worker processes, then hashes | **Contained, not removed.** 13,936,640 hashes in 3,000 ms on one core. 0 of 11 workers created. 0 of 2 pool dials connected. |
-| **CPU loop** | [T1496.001](https://attack.mitre.org/techniques/T1496/001/) Compute Hijacking · CWE-400 | Hashes for as long as it is allowed | ***Bounded.*** It runs, at about 4.6 million hashes/s (a native thread on the same machine does 5.2 million). It stopped at the 3 s cap built into the component. No platform CPU limit interrupted it. |
+| **Start miner** | [T1496](https://attack.mitre.org/techniques/T1496/) Resource Hijacking | Dials the pool, starts 8 worker threads and 3 worker processes, then hashes | **Contained, not removed.** 13,793,280 hashes in 3,000 ms on one core. 0 of 11 workers created. 0 of 2 pool dials connected. |
+| **CPU loop** | [T1496.001](https://attack.mitre.org/techniques/T1496/001/) Compute Hijacking · CWE-400 | Hashes for as long as it is allowed | ***Bounded.*** It runs, at about 4.6 million hashes/s (a native thread on the same machine did 5.2 million when last compared). It stopped at the 3 s cap built into the component. No platform CPU limit interrupted it. |
 | **Spawn workers** | T1496.001: scale out to every core | `std::thread::Builder::spawn` × 8; `std::process::Command::spawn` × 3 | ***Removed.*** 0 of 11 created: `operation not supported on this platform`. The component imports no thread or process interface, so there is nothing to call. |
-| **Grow memory** | T1496 / [T1499](https://attack.mitre.org/techniques/T1499/) Endpoint DoS · CWE-400, CWE-770 | `memory.grow` in 16 MiB steps until refused | ***Bounded.*** Grew from 1.7 MiB to 256 MiB, the ceiling built into the component. The runtime did not refuse, although the manifest declares `memoryLimitMb: 64`. The memory is gone when the instance is dropped, which is after this one request. |
+| **Grow memory** | T1496 / [T1499](https://attack.mitre.org/techniques/T1499/) Endpoint DoS · CWE-400, CWE-770 | `memory.grow` in 16 MiB steps until refused | ***Bounded.*** Grew from 1.7 MiB to 64 MiB, the ceiling built into the component. The runtime did not refuse, although the manifest declares `memoryLimitMb: 32`. The memory is gone when the instance is dropped, which is after this one request. |
 | **Dial pool** | T1496: reach the pool ([T1071](https://attack.mitre.org/techniques/T1071/)) | One HTTP request each to `203.0.113.66:3333` and `pool.attacker.example:3333` | ***Removed.*** Both `ErrorCode::HttpRequestDenied`. `allowedHosts: []`, and the host logs `allowed_hosts policy is empty (deny-all)`. |
 | **Persist** | T1496: keep working after the request | Returns its response, then keeps hashing in a background task | ***Bounded.*** With `maxInvocations: 1` the instance is dropped after its request: 0 background steps completed in 5 of 5 runs. Without that setting the work carried on (see below). |
-| **Run evasion probe** | resource-limit evasion | 13 variants: 4 ways to start a thread, 3 to start a process, 6 memory-growth patterns | 13 variants tried, 0 exceeded the budget of 0 workers and the component's 256 MiB ceiling. Against the *declared* 64 MiB limit, 6 of 13 exceeded it. See [Findings](#findings). |
+| **Run evasion probe** | resource-limit evasion | 13 variants: 4 ways to start a thread, 3 to start a process, 6 memory-growth patterns | 13 variants tried, 0 exceeded the budget of 0 workers and the component's 64 MiB ceiling. Against the *declared* 32 MiB limit, 6 of 13 exceeded it. See [Findings](#findings). |
 
 ## Contained, not removed
 
@@ -58,16 +60,16 @@ that bound actually fire?" Here is what was measured, without rounding up.
 - **Staying resident.** There is no disk to install onto, no process to leave behind and, with
   `maxInvocations: 1`, no instance that survives the request.
 
-**What bounds the rest, on this host (measured):**
+**What bounds the rest, on Cosmonic Desktop (measured):**
 
 | Bound | Declared in the manifest | What happened |
 |---|---|---|
 | Egress | `allowedHosts: []` | **Enforced.** Every dial denied before a connection was attempted. |
-| Instance lifetime | `maxInvocations: 1` | **Enforced.** Every request got a fresh instance (`invocation_in_this_instance: 1` every time). Memory grown to 256 MiB by one request was back to 1.7 MiB for the next. Background work left running after a response completed 0 steps, in 5 of 5 runs. |
-| Operator stop | `cosmonic_workload_stop` | **Enforced.** A background task that was logging a heartbeat every 5 s stopped within one interval of the stop. |
-| Memory | `memoryLimitMb: 64` | **Not enforced on this host.** The component grew to 256 MiB and stopped only at its own ceiling. |
-| CPU | `cpuLimit: 1` | **No observable effect on this host.** The loop ran at 89% of native single-thread speed with or without the setting, and nothing interrupted it in 3 s. A component is single-threaded, so one core is already its maximum. |
-| Request timeout | none found in the Workload schema | **None observed.** A request that only waited (no CPU) stayed open for the full 120 s it asked for. |
+| Instance lifetime | `maxInvocations: 1` | **Enforced.** Every request got a fresh instance (`invocation_in_this_instance: 1` every time). Memory grown to 64 MiB by one request was back to 1.7 MiB for the next. Background work left running after a response completed 0 steps, in 5 of 5 runs. |
+| Operator stop | `cosmonic_workload_stop` | **Enforced.** A background task that was logging a heartbeat every 5 s stopped within one interval of the stop (0.5.32). |
+| Memory | `memoryLimitMb: 32` | **Not enforced on Desktop 0.5.33.** The component grew to 64 MiB, twice the declared limit, and stopped only at its own ceiling. |
+| CPU | `cpuLimit: 1` | **No observable effect on Desktop.** The loop ran at 89% of native single-thread speed with or without the setting (compared on 0.5.32), and nothing interrupted it in 3 s. A component is single-threaded, so one core is already its maximum. |
+| Request timeout | none found in the Workload schema | **None observed.** A request that only waited (no CPU) stayed open for the full 120 s it asked for (0.5.32). |
 
 So on Cosmonic Desktop today, the CPU bound on a hijacked component is this: **one core, for as
 long as its request stays open, and no longer if `maxInvocations: 1` is set.** That is a real
@@ -83,7 +85,7 @@ component behaved differently, and this was measured too:
   slices), ended only by the in-component cap;
 - a no-CPU background task was still alive 60 s after its response (12 of 12 heartbeats), again
   ended only by its own cap;
-- memory grown to 256 MiB stayed at 256 MiB for every later request to that instance.
+- memory grown to 64 MiB stayed at 64 MiB for every later request to that instance.
 
 A warm pool is a throughput feature, and it keeps instances alive on purpose. For a component you
 do not fully trust, `maxInvocations: 1` trades that throughput for a hard end to every request.
@@ -93,6 +95,11 @@ do not fully trust, `maxInvocations: 1` trades that throughput for a hard end to
 memory `resources.limits` are the outer bound on everything every component in it does. That is
 the standard Kubernetes mechanism and it was **not measured in this repo**, which only ran on
 Desktop. On Desktop there is no equivalent per-component quota that we could observe.
+
+That outer bound is shared. A host pod that hits its memory limit is restarted, and every workload
+in it goes down with it, which is why the ceiling built into this component is 64 MiB and not
+more: the public copy of the demo runs on a shared host, and a per-component limit that is not
+enforced cannot be what protects the neighbours.
 
 ## Quickstart
 
@@ -119,12 +126,12 @@ Each button costs at most 3 seconds of one core. Nothing keeps running afterward
 | Start miner | `/run?mode=miner` (the default) | 3 s of one core |
 | CPU loop | `/run?mode=cpu` (`&ms=500` for a shorter run; 3000 is the maximum) | up to 3 s of one core |
 | Spawn workers | `/run?mode=spawn` | none |
-| Grow memory | `/run?mode=memory` | up to 256 MiB, for one request |
+| Grow memory | `/run?mode=memory` | up to 64 MiB, for one request |
 | Dial pool | `/run?mode=pool` | none |
 | Persist | `/run?mode=persist`, then `/run?mode=status` | up to 3 s of one core if the instance survives |
 | Persist, no CPU | `/run?mode=persist&kind=heartbeat&secs=30` | none |
 | Open request, no CPU | `/run?mode=idle&secs=10` (120 is the maximum) | none |
-| Evasion probe | `/probe` lists the variants; `/probe?variant=NAME` runs one | up to 256 MiB, for one request |
+| Evasion probe | `/probe` lists the variants; `/probe?variant=NAME` runs one | up to 64 MiB, for one request |
 
 ```bash
 B=http://127.0.0.1:8200; H='Host: resource-hijack-sandbox.localhost'
@@ -142,10 +149,10 @@ attempts are left out. Every value shown is as returned.
 {
   "mode": "miner",
   "technique": "T1496 Resource Hijacking (CWE-400)",
-  "verdict": "CONTAINED, NOT REMOVED: the miner ran. 13936640 hashes in 3000 ms on one core, stopped by the in-component cap. 0 of 11 worker threads/processes created. 0 of 2 pool dials connected.",
+  "verdict": "CONTAINED, NOT REMOVED: the miner ran. 13793280 hashes in 3000 ms on one core, stopped by the in-component cap. 0 of 11 worker threads/processes created. 0 of 2 pool dials connected.",
   "cpu": {
     "ran": true,
-    "hashes": 13936640,
+    "hashes": 13793280,
     "elapsed_ms": 3000,
     "in_component_cap_ms": 3000,
     "stopped_by": "in-component cap",
@@ -191,14 +198,14 @@ attempts are left out. Every value shown is as returned.
 ```json
 {
   "mode": "memory",
-  "verdict": "BOUNDED, NOT REMOVED: memory grew from 1.6875 MiB to 256.0 MiB, stopped by the in-component cap.",
+  "verdict": "BOUNDED, NOT REMOVED: memory grew from 1.6875 MiB to 64.0 MiB, stopped by the in-component cap.",
   "memory": {
     "start_mb": 1.6875,
-    "reached_mb": 256.0,
-    "successful_grows": 16,
-    "in_component_ceiling_mb": 256,
+    "reached_mb": 64.0,
+    "successful_grows": 4,
+    "in_component_ceiling_mb": 64,
     "stopped_by": "in-component cap",
-    "stopped_by_detail": "growth reached the 256 MiB ceiling built into the component; the runtime had not refused"
+    "stopped_by_detail": "growth reached the 64 MiB ceiling built into the component; the runtime had not refused"
   }
 }
 ```
@@ -224,35 +231,41 @@ thread-burst             0 of 64 created            operation not supported on t
 process-spawn            0 of 1 created             operation not supported on this platform
 process-output           0 of 1 created             operation not supported on this platform
 process-status           0 of 1 created             operation not supported on this platform
-memory-grow-1-page       1.6875 -> 256 MiB          stopped by in-component cap
-memory-grow-16mb         1.6875 -> 256 MiB          stopped by in-component cap
-memory-grow-one-jump     1.6875 -> 256 MiB          stopped by in-component cap
-memory-vec-64k           1.6875 -> 256 MiB          stopped by in-component cap
-memory-vec-1mb           1.6875 -> 255.688 MiB      stopped by in-component cap
-memory-vec-one-large     1.6875 -> 255.875 MiB      stopped by in-component cap
+memory-grow-1-page       1.6875 -> 64 MiB           stopped by in-component cap
+memory-grow-16mb         1.6875 -> 64 MiB           stopped by in-component cap
+memory-grow-one-jump     1.6875 -> 64 MiB           stopped by in-component cap
+memory-vec-64k           1.6875 -> 64 MiB           stopped by in-component cap
+memory-vec-1mb           1.6875 -> 63.6875 MiB      stopped by in-component cap
+memory-vec-one-large     1.6875 -> 63.875 MiB       stopped by in-component cap
 
-13 variants tried, 0 exceeded the budget (0 workers; memory: in-component ceiling 256 MiB).
+13 variants tried, 0 exceeded the budget (0 workers; memory: in-component ceiling 64 MiB).
 ```
 
 Every memory variant starts at 1.6875 MiB because `maxInvocations: 1` gives each request a fresh
-instance. `MEMORY_LIMIT_MB=64 probe/run.sh` checks the same runs against the limit the manifest
+instance. `MEMORY_LIMIT_MB=32 probe/run.sh` checks the same runs against the limit the manifest
 declares instead of the component's own ceiling.
 
 ## Findings
 
-Recorded as measured on Cosmonic Desktop 0.5.32, runtime 2.12.0, macOS/aarch64.
+Recorded as measured on Cosmonic Desktop, runtime 2.12.0, macOS/aarch64. Findings 1 and 3 were
+re-measured on Desktop 0.5.33 with image `0.1.3` (64 MiB ceiling, declared limit 32 MiB). Findings
+2, 4 and 5 are as measured on 0.5.32 and were not re-run. None of this was measured on a Cosmonic
+Control cluster.
 
 1. **`memoryLimitMb` is accepted and stored, and not enforced.** With
-   `localResources.memoryLimitMb: 64` in the applied spec (confirmed with `cosmonic_workload_get`),
-   all six memory variants passed 64 MiB and reached about 256 MiB:
-   `13 variants tried, 6 exceeded the budget (0 workers; memory: declared memoryLimitMb 64)`.
-   The only memory bound that fired was the component's own. Flagged for upstream report.
+   `localResources.memoryLimitMb: 32` in the applied spec (confirmed with `cosmonic_workload_get`),
+   all six memory variants passed 32 MiB and reached about 64 MiB (63.7 to 64.0):
+   `13 variants tried, 6 exceeded the budget (0 workers; memory: declared memoryLimitMb 32)`.
+   The only memory bound that fired was the component's own. Flagged for upstream report. The
+   same result was first recorded on 0.5.32 with a declared limit of 64 MiB and a 256 MiB ceiling;
+   the ceiling was lowered to 64 MiB for the shared host, and the declared limit to 32 MiB so the
+   check still has room to fail.
 2. **`cpuLimit` had no observable effect.** The 3 s loop produced the same hash rate with
    `cpuLimit: 1` and with the field absent, and was never interrupted. This probe cannot tell
    "not enforced" from "enforced at one core", because a component cannot use more than one.
 3. **Work continues after the response when the instance is pooled.** With the default pool
    (`poolSize: 1`, `maxInvocations: 0`) a task spawned before the handler returned ran its whole
-   3,000 ms of hashing, and a no-CPU task was alive 60 s later. `maxInvocations: 1` ended both: 0
+   3,000 ms of hashing (12 of 12 slices), and a no-CPU task was alive 60 s later. `maxInvocations: 1` ended both: 0
    steps completed in 5 of 5 runs. The shipped manifest sets it.
 4. **No request timeout was observed.** An idle request stayed open for 120,323 ms.
 5. **The Workload validator accepts unknown fields.** `cosmonic_workload_validate` returned
@@ -261,8 +274,12 @@ Recorded as measured on Cosmonic Desktop 0.5.32, runtime 2.12.0, macOS/aarch64.
 
 ## Status
 
-Built, deployed and verified on Cosmonic Desktop. What this repo did **not** measure:
+Built, deployed and verified on Cosmonic Desktop 0.5.33. What this repo did **not** measure:
 
+- **The shared cluster.** The same image is meant to be served from a Kubernetes-hosted Cosmonic
+  Control cluster as well. Whether `memoryLimitMb` or `cpuLimit` is enforced there has not been
+  measured. The page makes no claim about it: each result's `stopped_by` reports what stopped the
+  probe on the host that served it.
 - **Concurrency.** Everything here is one request at a time, on purpose: this is a working
   machine. How many cores N simultaneous requests can occupy was not tested. The bound above is
   per request, not per workload.
@@ -284,7 +301,7 @@ What this demo lets you say about neighbouring techniques, and how far:
 | [T1496.002](https://attack.mitre.org/techniques/T1496/002/) Bandwidth Hijacking | Removed for outbound | Needs egress. Same `allowedHosts: []` denial as the pool dial; not separately tested. A component's own HTTP responses still use bandwidth. |
 | [T1496.003](https://attack.mitre.org/techniques/T1496/003/) SMS Pumping, [T1496.004](https://attack.mitre.org/techniques/T1496/004/) Cloud Service Hijacking | Removed, by the same argument | Both work by calling an outside service. No allowed host, and no credentials in the environment. Not separately tested. |
 | [T1498](https://attack.mitre.org/techniques/T1498/) Network Denial of Service | Removed as a *source* | The component imports no `wasi:sockets` and cannot make an outbound request, so it cannot flood anyone. This says nothing about a flood aimed *at* the workload. |
-| [T1499](https://attack.mitre.org/techniques/T1499/) Endpoint Denial of Service | **Bounded, within the budget above** | A component can exhaust what it is allowed: one core while a request is open, and, on this host, as much memory as it asks for. Read finding 1 before relying on a memory limit. |
+| [T1499](https://attack.mitre.org/techniques/T1499/) Endpoint Denial of Service | **Bounded, within the budget above** | A component can exhaust what it is allowed: one core while a request is open, and, on Desktop, as much memory as it asks for. Read finding 1 before relying on a memory limit. |
 | [T1485](https://attack.mitre.org/techniques/T1485/) Data Destruction, [T1486](https://attack.mitre.org/techniques/T1486/) Data Encrypted for Impact | Limited to granted data | This workload mounts no volume, so there is nothing to destroy or encrypt. A component that *is* granted a volume can destroy or encrypt exactly that volume. The sandbox narrows the blast radius to the grant; it does not protect the granted data. Not tested here. |
 
 ## See it without a sandbox
@@ -338,8 +355,8 @@ No `wasi:sockets`, no `wasi:filesystem`, nothing that starts a thread or a proce
 is `wasi:http/client`, and `allowedHosts: []` refuses every request made through it.
 
 Every probe carries a safety budget inside the component
-([`probes.rs`](cosmonic-app/miner/src/probes.rs)): 3,000 ms of hashing per request and a 256 MiB
-memory ceiling. Those caps exist so the demo is safe to run on a laptop. They are not part of the
+([`probes.rs`](cosmonic-app/miner/src/probes.rs)): 3,000 ms of hashing per request and a 64 MiB
+memory ceiling. Those caps exist so the demo is safe to run on a laptop and on a shared host. They are not part of the
 sandbox, and the scenario table says each time whether it was the cap or the platform that stopped
 a probe.
 
@@ -348,12 +365,12 @@ a probe.
 ```bash
 cd cosmonic-app/miner
 wash build        # cargo build --target wasm32-wasip2 --release
-wash oci push --insecure oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.2 \
+wash oci push --insecure oci.localhost:8200/apps/resource-hijack-sandbox-miner:0.1.3 \
   target/wasm32-wasip2/release/resource_hijack_miner.wasm
 ```
 
 Then apply [`deploy/resource-hijack-sandbox.workload.yaml`](deploy/resource-hijack-sandbox.workload.yaml).
-It pins `0.1.2` by digest; if you rebuild, bump the tag and pin your own digest
+It pins `0.1.3` by digest; if you rebuild, bump the tag and pin your own digest
 (`cosmonic_image_inspect` prints it). Needs Rust 1.94 or newer with the `wasm32-wasip2` target, and
 `wash`. Cosmonic Desktop's Preflight check installs them.
 

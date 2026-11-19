@@ -259,14 +259,14 @@ pub const PAGE: &str = r###"<!doctype html>
 
   <div class="try">
     <h2>Try it: start the miner</h2>
-    <p class="sub">Each button makes the real attempt inside the sandbox and prints the runtime's own answer. The "miner" is a stand-in: iterated SHA-256 over a counter, with no mining protocol, no wallet and no real pool. Every CPU burn is capped at 3 seconds, and memory growth at 256 MiB, inside the component itself.</p>
+    <p class="sub">Each button makes the real attempt inside the sandbox and prints the runtime's own answer. The "miner" is a stand-in: iterated SHA-256 over a counter, with no mining protocol, no wallet and no real pool. Every CPU burn is capped at 3 seconds, and memory growth at 64 MiB, inside the component itself. Each result's <code>stopped_by</code> says whether that cap or the platform ended the attempt on the host serving this page.</p>
     <table class="bugtable">
       <thead><tr><th>Button</th><th>Attempt</th><th>In the sandbox</th></tr></thead>
       <tbody>
         <tr><td><span class="bugtag">Start miner</span></td><td>pool + workers + CPU</td><td>The loop runs on one core until its 3 s budget ends. No workers, no pool.</td></tr>
-        <tr><td><span class="bugtag amber">CPU loop</span></td><td>hash until stopped</td><td><b>Bounded.</b> It runs, at close to native single-core speed, until the component's own 3 s cap. No platform CPU limit interrupts it on this host.</td></tr>
+        <tr><td><span class="bugtag amber">CPU loop</span></td><td>hash until stopped</td><td><b>Bounded.</b> It runs on one core until the component's own 3 s cap, unless the platform ends the invocation first. The result says which one stopped it here.</td></tr>
         <tr><td><span class="bugtag">Spawn workers</span></td><td>threads, processes</td><td><b>Removed.</b> No thread or process capability exists to ask with.</td></tr>
-        <tr><td><span class="bugtag amber">Grow memory</span></td><td>memory.grow in steps</td><td><b>Bounded.</b> It grows to the component's own 256 MiB ceiling. The manifest's <code>memoryLimitMb: 64</code> does not stop it on this host. The memory is freed when the instance is dropped.</td></tr>
+        <tr><td><span class="bugtag amber">Grow memory</span></td><td>memory.grow in steps</td><td><b>Bounded.</b> It grows until the runtime refuses a <code>memory.grow</code> or it reaches the component's own 64 MiB ceiling, whichever comes first. The demo manifest declares <code>memoryLimitMb: 32</code>, below that ceiling: <code>stopped_by: platform</code> means the host enforced a limit, <code>in-component cap</code> means none fired. The memory is freed when the instance is dropped.</td></tr>
         <tr><td><span class="bugtag">Dial pool</span></td><td>HTTP to 203.0.113.66</td><td><b>Removed.</b> <code>allowedHosts: []</code>, so the host refuses the request.</td></tr>
         <tr><td><span class="bugtag amber">Persist</span></td><td>work after the response</td><td><b>Bounded.</b> <code>maxInvocations: 1</code> drops the instance after its one request, and the background work goes with it. Without that setting, the work carries on.</td></tr>
       </tbody>
