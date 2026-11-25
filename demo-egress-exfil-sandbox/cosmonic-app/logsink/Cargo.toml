@@ -1,0 +1,45 @@
+[package]
+name = "egress-exfil-logsink"
+edition = "2021"
+version = "0.1.0"
+# p3 build floor: wasip3's component-type section needs wasm-component-ld
+# >= 0.5.20 (bundled with Rust >= 1.94).
+rust-version = "1.94"
+
+[lints]
+workspace = true
+
+[workspace]
+
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = 'deny'
+expect_used = 'deny'
+panic = 'deny'
+indexing_slicing = 'deny'
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# WASI 0.3 (p3) HTTP handler. The sink only receives: it has no outbound
+# request code, no filesystem and no storage. What it is sent is counted and
+# dropped.
+wasip3 = { version = "0.9.0", features = ["http-compat"] }
+wit-bindgen = { version = "0.62.0", default-features = false, features = [
+    "async",
+    "async-spawn",
+    "inter-task-wakeup",
+] }
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+serde_json = "1"
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true

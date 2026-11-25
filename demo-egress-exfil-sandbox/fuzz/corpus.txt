@@ -1,0 +1,148 @@
+# Egress allow-list evasion corpus for demo-egress-exfil-sandbox.
+#
+# One variant per line, whitespace separated:
+#
+#     <class>  <authority>  <technique>  <note ...>
+#
+# <authority> is handed to the runtime byte for byte as the request's
+# `:authority` (wasi:http `request.set-authority`). `\xNN` escapes a raw byte so
+# spaces, CR/LF and NUL can be written on one line. Nothing in the guest
+# normalises it first: the runtime is the only parser between this string and
+# the wire.
+#
+# The allow-list under test is exactly one entry: the host of the shipper's
+# configured sink (LOG_SINK_URL). On Cosmonic Desktop that is
+#
+#     allowedHosts: ["egress-exfil-logsink.localhost"]
+#
+# The corpus does not hardcode that name. Every variant built from the
+# allow-listed host is written with a placeholder, and both the component and
+# fuzz/run.py fill it in from the live LOG_SINK_URL before sending, so the same
+# corpus tests whatever host a deployment actually allow-lists. Every request
+# is sent with the sink URL's scheme (http or https).
+#
+#     {host}                 the sink's hostname
+#     {:port}                ":PORT" if LOG_SINK_URL names a port, else nothing
+#     {port}                 the port number in effect (named, else 80 or 443)
+#     {host:upper}           upper-cased
+#     {host:mixed}           first letter of every word upper-cased
+#     {host:fullwidth}       first character as its fullwidth form
+#     {host:ideodot}         first dot as U+3002
+#     {host:percent}         first character percent-encoded
+#     {host:label}           the first label alone
+#     {host:parent}          everything after the first label
+#     {host:truncated}       first label with its last letter removed
+#     {host:homoglyph}       last i (else a, e, o, c, p) of the first label as
+#                            its Cyrillic look-alike
+#     {host:homoglyph-puny}  that label in punycode (xn--)
+#
+# A variant whose placeholder cannot be built for the configured host (no dot,
+# no letter to swap), or that comes out identical to the allow-listed host, is
+# skipped and counted as skipped, never as tried.
+#
+# Classes and what the harness asserts:
+#
+#   control     the exact allow-listed host. MUST connect (HTTP 200 from the sink).
+#   attacker    another spelling of the attacker destination. MUST NOT pass the allow-list.
+#   confusable  looks like the allow-listed host to a naive matcher, but a
+#               conforming client would connect somewhere else. MUST NOT pass.
+#   ssrf        loopback, link-local and metadata targets. MUST NOT pass.
+#   equivalent  another spelling of the allow-listed host itself. May be accepted
+#               or refused; recorded, never counted as an escape.
+#   byport      the allow-listed host on a different port. Recorded: the
+#               allow-list is hostname-only by design.
+#
+# "Pass" means the runtime let the request past the policy check: it connected,
+# or it failed later for a transport reason (DNS, refused, timeout).
+#
+# Attacker destinations are 203.0.113.66 (TEST-NET-3, RFC 5737, never routed)
+# and exfil.attacker.example (.example, RFC 2606, never resolves).
+
+# --- control ---------------------------------------------------------------
+control     {host}{:port}                                            exact                 the one allow-listed host, exactly as LOG_SINK_URL names it
+
+# --- the attacker destination, spelled every way ---------------------------
+attacker    203.0.113.66                                             ipv4-dotted           plain IPv4 literal
+attacker    203.0.113.66:80                                          ipv4-port             explicit default port
+attacker    203.0.113.66:8200                                        ipv4-ingress-port     the attacker IP on Cosmonic Desktop's ingress port
+attacker    3405803842                                               ipv4-decimal          203.0.113.66 as one decimal integer
+attacker    0xcb007142                                               ipv4-hex              as one hex integer
+attacker    0xcb.0x0.0x71.0x42                                       ipv4-hex-dotted       each octet in hex
+attacker    0313.0.0161.0102                                         ipv4-octal            each octet in octal
+attacker    203.0.29010                                              ipv4-short            three-part inet_aton form
+attacker    203.7426                                                 ipv4-short2           two-part inet_aton form
+attacker    203.0.113.66.                                            ipv4-trailing-dot     trailing dot on the literal
+attacker    [::ffff:203.0.113.66]                                    ipv6-mapped           IPv4-mapped IPv6
+attacker    [::ffff:cb00:7142]                                       ipv6-mapped-hex       IPv4-mapped IPv6, hex groups
+attacker    [0:0:0:0:0:ffff:cb00:7142]                               ipv6-mapped-long      uncompressed mapped form
+attacker    [::203.0.113.66]                                         ipv6-compat           deprecated IPv4-compatible IPv6
+attacker    [64:ff9b::203.0.113.66]                                  ipv6-nat64            NAT64 well-known prefix
+attacker    [2002:cb00:7142::1]                                      ipv6-6to4             6to4 address embedding the IPv4
+attacker    203。0。113。66                                             ipv4-ideographic-dot  U+3002 ideographic full stops
+attacker    ２０３.０.１１３.６６                                             ipv4-fullwidth        fullwidth digits (NFKC folds to ASCII)
+attacker    %32%30%33.0.113.66                                       ipv4-percent          percent-encoded leading octet
+attacker    exfil.attacker.example                                   domain                plain attacker domain
+attacker    exfil.attacker.example.                                  domain-trailing-dot   fully-qualified trailing dot
+attacker    EXFIL.ATTACKER.EXAMPLE                                   domain-uppercase      case folding
+attacker    eXfIl.AtTaCkEr.ExAmPlE:80                                domain-mixed-case     mixed case with a port
+attacker    exfil.xn--ttacker-1fg.example                            domain-punycode       punycode label (Cyrillic U+0430 for "a")
+attacker    exfil.аttacker.example                                   domain-idn            the same label as raw Unicode
+attacker    %65xfil.attacker.example                                 domain-percent        percent-encoded first letter
+attacker    exfil.attacker.example\x20                               domain-trailing-space trailing space
+attacker    \x20exfil.attacker.example                               domain-leading-space  leading space
+attacker    exfil.attacker.example\x09                               domain-trailing-tab   trailing tab
+
+# --- confusables: the allow-listed name used as camouflage ------------------
+confusable  {host}@203.0.113.66                                      userinfo              allow-listed name as userinfo; host is the attacker
+confusable  {host}:{port}@203.0.113.66                               userinfo-port         name:port as user:password
+confusable  {host}:{port}@exfil.attacker.example                     userinfo-domain       the same, attacker domain
+confusable  {host}%40203.0.113.66                                    userinfo-percent      percent-encoded @
+confusable  203.0.113.66#@{host}                                     fragment-at           fragment hides the allow-listed tail
+confusable  203.0.113.66?@{host}                                     query-at              query hides the allow-listed tail
+confusable  203.0.113.66\x5c@{host}                                  backslash-at          backslash parser differential
+confusable  {host}.attacker.example                                  suffix-domain         allow-listed name as a subdomain of the attacker
+confusable  {host}.203.0.113.66                                      suffix-ip             allow-listed name prefixed to the attacker IP
+confusable  attacker.{host}                                          subdomain             a subdomain of the allow-listed name (no wildcard granted)
+confusable  evil-{host}                                              prefix                allow-listed name as a suffix of another label
+confusable  {host}-attacker.example                                  hyphen-suffix         allow-listed name as a label prefix
+confusable  {host}x                                                  tld-suffix            one extra letter on the TLD
+confusable  {host:truncated}                                         label-truncated       the first label one letter short
+confusable  {host:label}                                             bare-label            the first label alone
+confusable  {host:parent}                                            parent                the parent name only
+confusable  {host:homoglyph}                                         homoglyph             a Cyrillic look-alike for one letter of the first label
+confusable  {host:homoglyph-puny}                                    homoglyph-punycode    the homoglyph label in punycode
+confusable  {host}\x00.attacker.example                              nul-byte              NUL truncation
+confusable  {host}\x0d\x0aHost:\x20203.0.113.66                      crlf-injection        header injection through the authority
+confusable  {host}\x20203.0.113.66                                   space-split           space-separated second host
+confusable  {host},203.0.113.66                                      comma-list            comma-separated host list
+confusable  {host};203.0.113.66                                      semicolon-list        semicolon-separated host list
+confusable  {host}/@203.0.113.66                                     slash-at              path separator inside the authority
+
+# --- SSRF targets -----------------------------------------------------------
+ssrf        169.254.169.254                                          metadata-ipv4         cloud instance metadata service
+ssrf        [fd00:ec2::254]                                          metadata-ipv6         AWS IPv6 metadata service
+ssrf        metadata.google.internal                                 metadata-name         GCP metadata name
+ssrf        2852039166                                               metadata-decimal      169.254.169.254 as one decimal integer
+ssrf        [::ffff:169.254.169.254]                                 metadata-mapped       IPv4-mapped metadata address
+ssrf        127.0.0.1:8200                                           loopback-ipv4         the host's own ingress by loopback IP
+ssrf        127.1:8200                                               loopback-short        short loopback form
+ssrf        2130706433:8200                                          loopback-decimal      127.0.0.1 as one decimal integer
+ssrf        0.0.0.0:8200                                             unspecified           the unspecified address
+ssrf        [::1]:8200                                               loopback-ipv6         IPv6 loopback
+ssrf        [::ffff:127.0.0.1]:8200                                  loopback-mapped       IPv4-mapped loopback
+ssrf        localhost:8200                                           loopback-name         the bare loopback name
+ssrf        host.wasmcloud.internal:8200                             host-internal         the reserved host-loopback name (not granted)
+ssrf        oci.localhost:8200                                       sibling-localhost     another .localhost name on the same ingress
+ssrf        [fe80::1]                                                link-local-ipv6       IPv6 link-local
+
+# --- equivalents: other spellings of the allow-listed host ------------------
+equivalent  {host:upper}{:port}                                      uppercase             case folding of the allow-listed name
+equivalent  {host:mixed}{:port}                                      mixed-case            mixed case
+equivalent  {host}.{:port}                                           trailing-dot          fully-qualified trailing dot
+equivalent  {host:fullwidth}{:port}                                  fullwidth             fullwidth first letter (UTS-46 maps it to ASCII)
+equivalent  {host:ideodot}{:port}                                    ideographic-dot       U+3002 as the label separator
+equivalent  {host}:0{port}                                           port-leading-zero     leading zero on the sink's port
+equivalent  {host:percent}{:port}                                    percent               percent-encoded first letter
+
+# --- the allow-listed host on another port ----------------------------------
+byport      {host}:9                                                 other-port            the discard port: nothing listens there

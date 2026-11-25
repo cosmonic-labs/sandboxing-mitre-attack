@@ -1,0 +1,36 @@
+package cosmonic:egress-demo@0.1.0;
+
+/// The worlds of the egress-exfil sandbox demo, written down.
+///
+/// Neither component vendors this file into its build: both get their bindings
+/// from the `wasip3` crate, which carries the `wasi:http@0.3.0` WIT. It is kept
+/// here as the readable contract, and it matches what
+/// `cosmonic_image_inspect` (or `wasm-tools component wit <file>.wasm`) reports
+/// for the built components. BUILD_INSTRUCTIONS.md sketches this world as
+/// `include wasi:http/proxy@0.2.0`; the p3 equivalent below is the same shape
+/// (one inbound handler, one outbound client) on the interface Cosmonic
+/// Desktop's warm pool serves.
+///
+/// What is NOT here is the point: no `wasi:sockets`, no `wasi:filesystem`
+/// preopen, no way to open a connection except through `wasi:http/client`,
+/// and that import is gated per request by the Workload's `allowedHosts`.
+
+/// The log shipper: the component under attack.
+///
+/// `client` is the only door out. The world does not say where it may lead;
+/// the Workload does (`localResources.allowedHosts`), and the host checks every
+/// request's authority against that list before it opens a connection. A
+/// request to any other host fails with `error-code::HTTP-request-denied`.
+world shipper {
+  /// Outbound HTTP: the POST the shipper uses to ship logs (and, when
+  /// hijacked, its workspace).
+  import wasi:http/client@0.3.0;
+  /// Inbound HTTP: the demo page, `/run`, `/fuzz` and `/probe`.
+  export wasi:http/handler@0.3.0;
+}
+
+/// The log sink: the one allow-listed destination. It only receives.
+world logsink {
+  /// Inbound HTTP: `POST /ingest` returns a receipt. Nothing is stored.
+  export wasi:http/handler@0.3.0;
+}

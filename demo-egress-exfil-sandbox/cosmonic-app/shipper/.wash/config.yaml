@@ -1,0 +1,15 @@
+# wash v2 config for the SHIPPER component.
+#
+# The "log shipper" under attack. It serves the demo page and, when driven with
+# a poisoned log batch, tries to POST its workspace to an attacker host. Its
+# only grant is one outbound hostname: the log sink. No filesystem at all.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/egress_exfil_shipper.wasm
+workload:
+  # The egress allow-list: exactly one host. Everything else is refused by the
+  # runtime before a connection is opened. Use [] for the strict variant.
+  allowedHosts:
+    - egress-exfil-logsink.localhost
+  # No volumeMounts, no volumes: this component has no on-disk authority.
