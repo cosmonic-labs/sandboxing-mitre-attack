@@ -1,0 +1,29 @@
+[package]
+name = "path-traversal-viewer"
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.94"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No HTTP here. This component exports ONE custom interface
+# (`cosmonic:path-demo/viewing`) and is invoked only by the `web` component over
+# the host's runtime link.
+wit-bindgen = { version = "0.62.0", default-features = false, features = ["macros"] }
+
+# Direct bindings to wasi:filesystem@0.2, used by the fuzz probes to call
+# `open-at` on the preopen descriptor itself, with no libc path handling in
+# between. The vulnerable viewer uses plain `std::fs`.
+wasip2 = "1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

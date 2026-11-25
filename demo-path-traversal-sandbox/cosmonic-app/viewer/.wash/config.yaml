@@ -1,0 +1,22 @@
+# wash v2 config for the VIEWER component.
+#
+# This is the component with the path-traversal bug. Its grants are the whole
+# mitigation: one read-only directory and no network at all.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/path_traversal_viewer.wasm
+workload:
+  # Deny-all egress. A file it did manage to read could not be sent anywhere.
+  allowedHosts: []
+  # The ONE directory it may read. `../..` has nowhere to go: the preopen is the
+  # root of everything this component can name.
+  volumeMounts:
+    - name: config
+      mountPath: /var/app/config
+      readOnly: true
+  volumes:
+    - name: config
+      hostPath:
+        # Absolute path of deploy/volume/config in YOUR checkout.
+        path: /ABSOLUTE/PATH/TO/demo-path-traversal-sandbox/deploy/volume/config

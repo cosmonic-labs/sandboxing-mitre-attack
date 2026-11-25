@@ -1,0 +1,22 @@
+# wash v2 config for the SEEDER component.
+#
+# A run-once `service` (wasi:cli/run) that fills the config volume with the
+# inert sample files when the workload starts, so the demo runs where no host
+# directory exists (an `ephemeral` volume). It is the only component with WRITE
+# authority on that volume. It takes no input and is linked to nothing: it
+# imports and exports no interface the other components use.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/path_traversal_seeder.wasm
+workload:
+  # Deny-all egress.
+  allowedHosts: []
+  # The same volume the viewer reads, mounted read-write at /seed.
+  volumeMounts:
+    - name: config
+      mountPath: /seed
+      readOnly: false
+  volumes:
+    - name: config
+      ephemeral: {}

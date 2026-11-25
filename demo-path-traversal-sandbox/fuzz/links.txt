@@ -1,0 +1,40 @@
+# The symlink fixtures for the fuzz corpus: `<name> <target>`, one per line.
+#
+# Every link is created in links/ INSIDE the mounted config directory. Most
+# point OUT of it; two point back inside as controls. The sandbox must follow
+# the inside ones and refuse the rest.
+#
+# {OUT} is the absolute path of the canary's directory:
+#   - fuzz/plant.sh (hostPath deployment) substitutes the host path of
+#     deploy/volume/outside in this checkout;
+#   - the `seeder` component (ephemeral-volume deployment) substitutes
+#     /outside, a path that exists nowhere, because it has no host path to use.
+#
+# This one file is read by fuzz/plant.sh and compiled into both the seeder
+# (which creates the links) and the viewer (which reports any that are absent).
+
+# controls: stay inside the preopen
+inside-file        ../app.conf
+inside-dir         ../profiles
+
+# file links to the canary
+canary-rel         ../../outside/CANARY.txt
+canary-rel-slash   ../../outside/CANARY.txt/
+canary-abs         {OUT}/CANARY.txt
+
+# directory links to the canary's directory, with and without a trailing slash
+outside-rel        ../../outside
+outside-rel-slash  ../../outside/
+outside-rel-dot    ../../outside/.
+outside-abs        {OUT}
+outside-abs-slash  {OUT}/
+
+# links to a parent of the preopen and to the filesystem root
+parent             ../..
+parent-slash       ../../
+root-abs           /
+
+# chains and a loop
+chain-file         canary-rel
+chain-dir          outside-rel-slash
+loop               loop

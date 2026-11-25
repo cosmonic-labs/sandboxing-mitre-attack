@@ -1,0 +1,11 @@
+# Rust build output
+target/
+**/target/
+
+# wasm build artifacts
+*.wasm
+
+# macOS
+.DS_Store
+deploy/volume/config/links/
+fuzz/results.json

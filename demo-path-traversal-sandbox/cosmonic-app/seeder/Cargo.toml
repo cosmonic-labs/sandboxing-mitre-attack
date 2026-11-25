@@ -1,0 +1,28 @@
+[package]
+name = "path-traversal-seeder"
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.94"
+
+[workspace]
+
+# A command component: `main` becomes the `wasi:cli/run` export, which is what a
+# Workload `service` runs once when the workload starts. No HTTP, no custom
+# interface, nothing imported from or exported to the other components.
+[[bin]]
+name = "path_traversal_seeder"
+path = "src/main.rs"
+
+[dependencies]
+# Direct bindings to wasi:filesystem@0.2 for `symlink-at` on the preopen
+# descriptor (std's WASI symlink API is still unstable). Everything else is
+# plain `std::fs`.
+wasip2 = "1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

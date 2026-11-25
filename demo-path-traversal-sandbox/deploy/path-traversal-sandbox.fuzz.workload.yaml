@@ -1,0 +1,80 @@
+# Durable Workload, hostPath variant: the path-traversal sandbox demo set up
+# for the fuzz harness (fuzz/plant.sh + fuzz/run.py) on Cosmonic Desktop.
+#
+# Same components and images as path-traversal-sandbox.workload.yaml. The
+# difference is the volume: here `config` is a hostPath volume pointing at
+# deploy/volume/config in this checkout, so that
+#   - fuzz/plant.sh can plant symlinks whose targets are real host paths, and
+#   - a canary file sits just OUTSIDE the mount (deploy/volume/outside/CANARY.txt),
+#     giving the outward links something real to reach for.
+# A cluster has no such directory; use the default (ephemeral) manifest there.
+#
+# The seeder service is present but mounted READ-ONLY here. The directory
+# already holds the sample files, so it finds the tree complete, writes nothing
+# and exits; it could not write to your checkout if it tried. (If you have not
+# run fuzz/plant.sh, its attempt to create links/ is refused and the links stay
+# absent.) It is linked to nothing, so viewer's only preopen is /var/app/config.
+#
+# Never point the volume at a directory that holds anything real. hostPath
+# needs an ABSOLUTE path, so edit the `path:` below to match your checkout
+# before applying.
+#
+# Apply: cosmonic_workload_apply(<this file>). Same workload name and host as
+# the default manifest, so applying one replaces the other.
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: path-traversal-sandbox
+  namespace: default
+  annotations:
+    # The demo images are unsigned, so Cosmonic Desktop needs this to run them.
+    # For a Cosmonic Control / production deployment, SIGN the images and REMOVE
+    # this annotation; do not weaken signature enforcement there.
+    desktop.cosmonic.com/unsafe-allow-unsigned: "true"
+spec:
+  components:
+    # The UI + HTTP entrypoint. Imports cosmonic:path-demo/viewing (satisfied by
+    # the viewer component below, auto-linked). Zero capability grants.
+    - name: web
+      image: oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.4@sha256:40379e592a224b0aa330d20bbc102e62dd414d1df5f41efb99e2930a9a30c009
+      poolSize: 8
+      localResources:
+        allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
+
+    # The vulnerable config viewer. Exports cosmonic:path-demo/viewing. Its ONLY
+    # authority is the /var/app/config directory, read-only; no network, no HTTP.
+    - name: viewer
+      image: oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.5@sha256:4b3e4ec2963ee8440ddfbd40f6d2d82a63b9921e5d19d54c8c787d0698543764
+      poolSize: 1
+      localResources:
+        allowedHosts: []                  # deny-all egress: a file it read could not leave
+        volumeMounts:
+          - name: config
+            mountPath: /var/app/config    # the single preopen
+            readOnly: true
+
+  # The seeder: runs once at workload start, finds the sample files already
+  # there and exits. Read-only in this variant; no network, no HTTP, no link.
+  service:
+    name: seeder
+    image: oci.localhost:8200/apps/path-traversal-sandbox-seeder:0.1.2@sha256:609f0ad62e79ed72fe49bf5308be5748adb9c766f3c07beb3e4e0549885dc556
+    maxRestarts: 0
+    localResources:
+      allowedHosts: []                    # deny-all egress
+      volumeMounts:
+        - name: config
+          mountPath: /seed                # read-only here: nothing to seed, nothing to change
+          readOnly: true
+  volumes:
+    - name: config
+      hostPath:
+        # EDIT ME: the absolute path of deploy/volume/config in your checkout.
+        path: /Users/liam/source/cosmonic-labs/mitre-attack/demo-path-traversal-sandbox/deploy/volume/config
+  hostInterfaces:
+    # Binds to the component that exports wasi:http/handler (web). viewer and
+    # seeder have no HTTP surface, so routing is unambiguous.
+    - namespace: wasi
+      package: http
+      interfaces: [handler]                          # p3 wasi:http/handler@0.3.0
+      config:
+        host: path-traversal-sandbox.localhost       # http://path-traversal-sandbox.localhost:8200/

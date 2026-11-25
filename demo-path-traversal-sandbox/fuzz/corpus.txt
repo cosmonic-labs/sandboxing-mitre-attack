@@ -1,0 +1,253 @@
+# Filesystem-preopen evasion corpus for demo-path-traversal-sandbox.
+#
+# One variant per line, whitespace separated:
+#
+#     <class>  <technique>  <name>  <note ...>
+#
+# <name> is the "config file name" handed to the vulnerable viewer, byte for
+# byte. The viewer joins it onto /var/app/config with no canonicalization and
+# opens the result. Nothing in the guest normalises it first: the runtime's
+# preopen resolution is the only check between this string and the host
+# filesystem.
+#
+# Escapes and tokens in <name>:
+#
+#     \xNN         one raw byte (so NUL, space, tab and invalid UTF-8 fit on a line)
+#     \u{HHHH}     one Unicode scalar, encoded as UTF-8
+#     \\           a literal backslash
+#     {OUT}        absolute HOST path of deploy/volume/outside (starts with "/")
+#     {REP:s:n}    the string s repeated n times
+#
+# Layout under test (deploy/volume/ in this repo):
+#
+#     config/              <- the ONLY directory mounted, at /var/app/config, read-only
+#       app.conf  database.conf  profiles/{staging.conf, café.conf}
+#       links/             <- symlinks planted by fuzz/plant.sh, most pointing OUT
+#     outside/CANARY.txt   <- NOT mounted. A harmless marker. Reading it = escape.
+#
+# So from inside the preopen the canary is at ../outside/CANARY.txt. No variant
+# targets a real credential: the only non-canary target is root/.ssh/id_rsa,
+# which the demo expects not to exist anywhere the component can name.
+#
+# Classes and what the harness asserts:
+#
+#   control     a legitimate name. MUST return the file from inside the preopen.
+#   escape      tries to name something outside the preopen. MUST NOT return
+#               anything from outside it (refused, or resolved to a path inside).
+#   equivalent  another spelling of an inside path that a host filesystem may or
+#               may not treat as the same file. Recorded, never an escape unless
+#               outside content comes back.
+#
+# For every variant the viewer tries read, list and stat through two routes:
+#   std  the vulnerable viewer's own path: Path::join + std::fs (wasi-libc)
+#   raw  wasi:filesystem `open-at` / `stat-at` called directly on the preopen
+#        descriptor with the name as given (valid UTF-8 names only)
+
+# ---- controls: the legitimate viewer still works -------------------------------
+control     plain-file            app.conf                              the benign "View app.conf" button
+control     plain-file            database.conf                         a second sample file
+control     subdirectory          profiles/staging.conf                 one level down
+control     dot-segment           ./app.conf                            leading ./
+control     dot-segment           profiles/./staging.conf               interior ./
+control     double-slash          profiles//staging.conf                repeated separator
+control     dotdot-inside         profiles/../app.conf                  .. that stays inside the preopen
+control     symlink-inside        links/inside-file                     symlink to ../app.conf (stays inside)
+control     symlink-inside        links/inside-dir/staging.conf         through a symlink to ../profiles
+control     unicode-nfc           profiles/caf\u{e9}.conf               precomposed name, as stored on disk
+
+# ---- classic .. traversal ------------------------------------------------------
+escape      dotdot                ../../root/.ssh/id_rsa                the headline button
+escape      dotdot                ../outside/CANARY.txt                 one level up to the canary
+escape      dotdot                ../../../../../../../../root/.ssh/id_rsa   more .. than there are levels
+escape      dotdot                profiles/../../outside/CANARY.txt     down one, up two
+escape      dotdot                ./../outside/CANARY.txt               ./ prefix
+escape      dotdot                .././outside/CANARY.txt               ./ after ..
+escape      dotdot                ..//outside//CANARY.txt               doubled separators
+escape      dotdot                ../outside/./CANARY.txt               interior ./
+escape      dotdot                nonexistent/../../outside/CANARY.txt  .. through a missing directory
+escape      dotdot                app.conf/../../outside/CANARY.txt     .. through a regular file
+escape      dotdot                links/inside-dir/../../outside/CANARY.txt   .. after an inside symlink
+escape      dotdot-list           ..                                    list the preopen's parent
+escape      dotdot-list           ../                                   parent, trailing slash
+escape      dotdot-list           ../.                                  parent, trailing dot
+escape      dotdot-list           ../..                                 grandparent
+escape      dotdot-list           ../outside                            the canary's directory
+escape      dotdot-list           ../outside/                           the canary's directory, trailing slash
+escape      dotdot-trailing       ../outside/CANARY.txt/                file with a trailing slash
+escape      dotdot-trailing       ../outside/CANARY.txt/.               file with trailing /.
+escape      filter-bypass         ....//outside/CANARY.txt              survives a naive "../" strip
+escape      filter-bypass         ..././outside/CANARY.txt              survives a naive "./" strip
+escape      filter-bypass         ....\\/outside/CANARY.txt             mixed-separator strip bypass
+escape      filter-bypass         .../outside/CANARY.txt                three dots
+escape      filter-bypass         ..../outside/CANARY.txt               four dots
+escape      filter-bypass         ..;/outside/CANARY.txt                path-parameter trick (..;/)
+
+# ---- absolute paths ------------------------------------------------------------
+escape      absolute              /root/.ssh/id_rsa                     absolute: Path::join discards the base
+escape      absolute              {OUT}/CANARY.txt                      absolute host path of the canary
+escape      absolute              /{OUT}/CANARY.txt                     double leading slash
+escape      absolute              {OUT}                                 absolute host path of its directory
+escape      absolute              /var/app/outside/CANARY.txt           sibling of the mount point, guest view
+escape      absolute              /var/app/config/../outside/CANARY.txt mount point then ..
+escape      absolute              /var/app/config/../../../{OUT}/CANARY.txt   mount point, .. to /, host path
+escape      absolute              /                                     list the root
+escape      absolute              /var/app                              list the mount point's parent
+escape      url-scheme            file://{OUT}/CANARY.txt               file: URL
+escape      url-scheme            file:{OUT}/CANARY.txt                 file: URL, no authority
+
+# ---- symlinks planted inside the preopen, pointing out --------------------------
+escape      symlink               links/canary-rel                      -> ../../outside/CANARY.txt
+escape      symlink               links/canary-abs                      -> {OUT}/CANARY.txt
+escape      symlink               links/chain-file                      -> canary-rel -> canary
+escape      symlink               links/outside-rel/CANARY.txt          dir link -> ../../outside
+escape      symlink               links/outside-abs/CANARY.txt          dir link -> {OUT}
+escape      symlink               links/outside-rel-dot/CANARY.txt      dir link -> ../../outside/.
+escape      symlink               links/chain-dir/CANARY.txt            -> outside-rel-slash -> ../../outside/
+escape      symlink               links/parent/outside/CANARY.txt       dir link -> ../..
+escape      symlink               links/root-abs{OUT}/CANARY.txt        dir link -> / then the host path
+escape      symlink               links/outside-rel/../outside/CANARY.txt   .. after an outward link
+escape      symlink               links/loop                            -> loop (must fail, not hang)
+escape      symlink-list          links/outside-rel                     list through a dir link
+escape      symlink-list          links/outside-abs                     list through an absolute dir link
+escape      symlink-list          links/parent                          list the volume's parent through a link
+escape      symlink-list          links/root-abs                        list the host root through a link
+equivalent  symlink-case          LINKS/INSIDE-FILE                     case-folded inside link (case-insensitive hosts)
+escape      symlink-case          LINKS/CANARY-REL                      case-folded outward link
+escape      symlink-case          Links/Outside-Rel/CANARY.txt          case-folded outward dir link
+
+# ---- symlinks with trailing slashes (the cap-std CVE class, CWE-61) -------------
+escape      symlink-trailing      links/canary-rel/                     file link, trailing slash on the request
+escape      symlink-trailing      links/canary-rel/.                    file link, trailing /.
+escape      symlink-trailing      links/canary-rel-slash                file link whose TARGET ends in a slash
+escape      symlink-trailing      links/canary-rel-slash/               both
+escape      symlink-trailing      links/canary-abs/                     absolute file link, trailing slash
+escape      symlink-trailing      links/chain-file/                     chained file link, trailing slash
+escape      symlink-trailing      links/outside-rel/                    dir link, trailing slash on the request
+escape      symlink-trailing      links/outside-rel//                   dir link, two trailing slashes
+escape      symlink-trailing      links/outside-rel/.                   dir link, trailing /.
+escape      symlink-trailing      links/outside-rel-slash               dir link whose TARGET ends in a slash
+escape      symlink-trailing      links/outside-rel-slash/              both
+escape      symlink-trailing      links/outside-rel-slash/.             target slash, request /.
+escape      symlink-trailing      links/outside-rel-slash/CANARY.txt    read through a target-slash dir link
+escape      symlink-trailing      links/outside-rel-slash//CANARY.txt   same, doubled separator
+escape      symlink-trailing      links/outside-rel-dot/                dir link -> ../../outside/. with slash
+escape      symlink-trailing      links/outside-abs/                    absolute dir link, trailing slash
+escape      symlink-trailing      links/outside-abs-slash               absolute dir link, target ends in slash
+escape      symlink-trailing      links/outside-abs-slash/              both
+escape      symlink-trailing      links/outside-abs-slash/CANARY.txt    read through it
+escape      symlink-trailing      links/chain-dir/                      chained dir link, trailing slash
+escape      symlink-trailing      links/parent/                         link to ../.. with trailing slash
+escape      symlink-trailing      links/parent-slash                    link to ../../ (target slash)
+escape      symlink-trailing      links/parent-slash/                   both
+escape      symlink-trailing      links/parent-slash/outside/CANARY.txt read through it
+escape      symlink-trailing      links/root-abs/                       link to / with trailing slash
+escape      symlink-trailing      links/root-abs/{OUT}/CANARY.txt       link to /, slash, host path
+escape      symlink-trailing      links/outside-rel/CANARY.txt/         through a dir link, slash on the file
+equivalent  symlink-trailing      links/inside-dir/                     inside dir link with trailing slash
+equivalent  symlink-trailing      links/inside-file/                    inside file link with trailing slash
+
+# ---- percent-encoding (what reaches the viewer AFTER the HTTP layer decodes once)
+escape      percent               %2e%2e/outside/CANARY.txt             encoded dots
+escape      percent               %2E%2E/outside/CANARY.txt             encoded dots, upper case
+escape      percent               ..%2foutside%2fCANARY.txt             encoded slashes
+escape      percent               %2e%2e%2foutside%2fCANARY.txt         everything encoded
+escape      percent               .%2e/outside/CANARY.txt               half-encoded ..
+escape      percent               %2e./outside/CANARY.txt               half-encoded .., other half
+escape      percent               ..%5coutside%5cCANARY.txt             encoded backslashes
+escape      percent               ../outside/CANARY.txt%00.conf         encoded NUL plus allowed extension
+escape      percent               ..%c0%afoutside%c0%afCANARY.txt       percent form of an overlong slash
+escape      percent               %c0%ae%c0%ae/outside/CANARY.txt       percent form of overlong dots
+escape      percent               %u002e%u002e/outside/CANARY.txt       IIS-style %u encoding
+escape      percent               links%2fcanary-rel                    encoded slash before a link
+escape      double-percent        %252e%252e/outside/CANARY.txt         double-encoded dots
+escape      double-percent        ..%252foutside%252fCANARY.txt         double-encoded slashes
+escape      double-percent        %252e%252e%252foutside%252fCANARY.txt everything double-encoded
+escape      double-percent        %25252e%25252e/outside/CANARY.txt     triple-encoded dots
+escape      double-percent        ..%255coutside%255cCANARY.txt         double-encoded backslashes
+
+# ---- overlong and invalid UTF-8 (raw bytes) ------------------------------------
+escape      overlong-utf8         \xc0\xae\xc0\xae/outside/CANARY.txt   2-byte overlong "."
+escape      overlong-utf8         ..\xc0\xafoutside\xc0\xafCANARY.txt   2-byte overlong "/"
+escape      overlong-utf8         \xc0\xae\xc0\xae\xc0\xafoutside\xc0\xafCANARY.txt   both overlong
+escape      overlong-utf8         \xe0\x80\xae\xe0\x80\xae/outside/CANARY.txt   3-byte overlong "."
+escape      overlong-utf8         ..\xe0\x80\xafoutside\xe0\x80\xafCANARY.txt   3-byte overlong "/"
+escape      overlong-utf8         \xf0\x80\x80\xae\xf0\x80\x80\xae/outside/CANARY.txt   4-byte overlong "."
+escape      overlong-utf8         ..\xc1\x9coutside\xc1\x9cCANARY.txt   2-byte overlong backslash
+escape      invalid-utf8          ../outside/CANARY.txt\xff             trailing 0xFF
+escape      invalid-utf8          \xff../outside/CANARY.txt             leading 0xFF
+escape      invalid-utf8          ..\x80/outside/CANARY.txt             lone continuation byte
+escape      invalid-utf8          ..\xed\xa0\x80/outside/CANARY.txt     encoded surrogate
+escape      invalid-utf8          ../outside/CANARY.txt\xc3             truncated sequence
+equivalent  invalid-utf8          app.conf\xff                          inside name plus 0xFF
+
+# ---- Unicode: homoglyphs and normalization ---------------------------------------
+escape      homoglyph-dot         \u{ff0e}\u{ff0e}/outside/CANARY.txt   fullwidth full stop (NFKC -> ".")
+escape      homoglyph-dot         \u{2024}\u{2024}/outside/CANARY.txt   one dot leader (NFKC -> ".")
+escape      homoglyph-dot         \u{2025}/outside/CANARY.txt           two dot leader (NFKC -> "..")
+escape      homoglyph-dot         \u{fe52}\u{fe52}/outside/CANARY.txt   small full stop (NFKC -> ".")
+escape      homoglyph-dot         \u{3002}\u{3002}/outside/CANARY.txt   ideographic full stop
+escape      homoglyph-dot         .\u{ff0e}/outside/CANARY.txt          one ASCII dot, one fullwidth
+escape      homoglyph-slash       ..\u{2215}outside\u{2215}CANARY.txt   division slash
+escape      homoglyph-slash       ..\u{2044}outside\u{2044}CANARY.txt   fraction slash
+escape      homoglyph-slash       ..\u{ff0f}outside\u{ff0f}CANARY.txt   fullwidth solidus (NFKC -> "/")
+escape      homoglyph-slash       ..\u{29f8}outside\u{29f8}CANARY.txt   big solidus
+escape      homoglyph-slash       ..\u{ff3c}outside\u{ff3c}CANARY.txt   fullwidth reverse solidus
+escape      homoglyph-slash       ..\u{2216}outside\u{2216}CANARY.txt   set minus
+escape      unicode-invisible     .\u{200b}./outside/CANARY.txt         zero-width space between the dots
+escape      unicode-invisible     ..\u{200d}/outside/CANARY.txt         zero-width joiner after ..
+escape      unicode-invisible     \u{feff}../outside/CANARY.txt         leading byte-order mark
+escape      unicode-invisible     ..\u{0301}/outside/CANARY.txt         combining acute on the second dot
+escape      unicode-invisible     \u{202e}../outside/CANARY.txt         right-to-left override
+equivalent  unicode-nfd           profiles/cafe\u{0301}.conf            decomposed spelling of an inside name
+escape      unicode-nfd           ../outside/CANARY\u{0301}.txt         decomposed-looking canary name
+escape      unicode-case          ../OUTSIDE/canary.TXT                 case-folded canary (case-insensitive hosts)
+equivalent  unicode-case          APP.CONF                              case-folded inside name
+escape      unicode-case          ../outs\u{0131}de/CANARY.txt          dotless i
+
+# ---- Windows separators and path syntax ----------------------------------------
+escape      windows-sep           ..\\outside\\CANARY.txt               backslashes
+escape      windows-sep           ..\\..\\root\\.ssh\\id_rsa            backslashes, headline target
+escape      windows-sep           ..\\/outside/CANARY.txt               backslash then slash
+escape      windows-sep           ../outside\\CANARY.txt                mixed
+escape      windows-sep           links\\canary-rel                     backslash before a link
+escape      windows-sep           profiles\\..\\..\\outside\\CANARY.txt down one, up two, backslashes
+escape      windows-path          C:..\\outside\\CANARY.txt             drive-relative
+escape      windows-path          C:\\root\\.ssh\\id_rsa                drive-absolute
+escape      windows-path          \\\\?\\{OUT}\\CANARY.txt              verbatim prefix
+escape      windows-path          \\\\localhost\\c$\\root\\.ssh\\id_rsa UNC share
+escape      windows-path          ../outside/CANARY.txt.                trailing dot
+escape      windows-path          ../outside/CANARY.txt::$DATA          alternate data stream syntax
+equivalent  windows-path          app.conf::$DATA                       inside name, stream syntax
+equivalent  windows-path          app.conf.                             inside name, trailing dot
+
+# ---- NUL bytes -----------------------------------------------------------------
+escape      nul-byte              ../outside/CANARY.txt\x00.conf        NUL then an allowed extension
+escape      nul-byte              ../outside/CANARY.txt\x00             trailing NUL
+escape      nul-byte              app.conf\x00/../../outside/CANARY.txt NUL after an allowed name
+escape      nul-byte              ..\x00/outside/CANARY.txt             NUL inside the traversal
+escape      nul-byte              \x00../outside/CANARY.txt             leading NUL
+escape      nul-byte              ../outside/\x00CANARY.txt             NUL before the file name
+escape      nul-byte              links/canary-rel\x00                  NUL after a link
+escape      nul-byte              \x00                                  a lone NUL
+
+# ---- whitespace and control characters -------------------------------------------
+escape      whitespace            ..\x20/outside/CANARY.txt             space after ..
+escape      whitespace            \x20../outside/CANARY.txt             leading space
+escape      whitespace            ../outside/CANARY.txt\x20             trailing space
+escape      whitespace            ..\x09/outside/CANARY.txt             tab after ..
+escape      whitespace            ../outside/CANARY.txt\x0a             trailing newline
+escape      whitespace            ..\x0d\x0a/outside/CANARY.txt         CRLF inside the traversal
+escape      whitespace            ..\x7f/outside/CANARY.txt             DEL after ..
+
+# ---- very long paths -------------------------------------------------------------
+escape      long-path             {REP:./:2000}../outside/CANARY.txt    4 KB of ./ then the traversal
+escape      long-path             {REP:profiles/../:400}../outside/CANARY.txt   4.8 KB of no-op hops
+escape      long-path             {REP:../:300}outside/CANARY.txt       300 levels up
+escape      long-path             {REP:../:300}{OUT}/CANARY.txt         300 levels up, then the host path
+escape      long-path             {REP:/:4096}{OUT}/CANARY.txt          4096 leading slashes
+escape      long-path             {REP:A:255}/../../outside/CANARY.txt  NAME_MAX component then ..
+escape      long-path             {REP:A:256}/../../outside/CANARY.txt  NAME_MAX+1 component then ..
+escape      long-path             {REP:A:5000}/../../outside/CANARY.txt 5 KB component then ..
+escape      long-path             ../outside/CANARY.txt{REP:/.:2000}    4 KB of trailing /.
+escape      long-path             {REP:./:35000}../outside/CANARY.txt   70 KB path, past 16-bit lengths
+equivalent  long-path             {REP:./:2000}app.conf                 4 KB of ./ then an inside name
