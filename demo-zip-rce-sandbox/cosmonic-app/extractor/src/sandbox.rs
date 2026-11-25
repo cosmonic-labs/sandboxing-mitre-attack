@@ -1,0 +1,486 @@
+//! The sandboxed extraction logic for the three attacks:
+//!   - RUSTSEC-2026-0367 (setuid/setgid/sticky preserved on extract),
+//!   - zip slip (symlink entries aimed at known paths outside the folder), and
+//!   - CVE-2026-115905 (zip cloaking: central-dir name hides the local-header
+//!     path a streaming extractor honors).
+//!
+//! The sandbox makes all three harmless: no Unix permission or symlink model,
+//! and a single preopen that an overwrite, hidden or not, cannot escape.
+//!
+//! This runs the SAME vulnerable crate (`zip` 8.6.0) and calls its vulnerable
+//! APIs itself: `ZipArchive::extract` and, for cloaked entries, the streaming
+//! `ZipStreamReader::extract`. We do not patch the crate and we do not mask the
+//! bits ourselves; what counts as "applied" or "escaped" is read back from disk. The point is to show that the WASM sandbox makes the vulnerable
+//! behavior harmless:
+//!
+//!   1. Confinement — the component's only writable path is the single
+//!      preopened directory `/tmp/unzip` (an ephemeral volume). It has no
+//!      ambient filesystem authority, so a zip-slip entry or an absolute path
+//!      cannot escape, and there is nowhere privileged to drop a file.
+//!   2. No privileged-bit semantics — `wasm32-wasip2` is not a Unix target, so
+//!      the crate's `#[cfg(unix)]` permission-setting code is compiled out, and
+//!      the WASI filesystem has no concept of setuid/setgid/sticky at all. The
+//!      malicious mode still arrives in the archive (we surface it), but it can
+//!      never be applied.
+
+use std::io::Cursor;
+use std::path::{Component, Path, PathBuf};
+
+use serde::Serialize;
+
+/// The one and only place this component may unzip into: a single tmp directory,
+/// provided by the host as an ephemeral volume mounted here.
+pub const SANDBOX_ROOT: &str = "/tmp/unzip";
+
+#[derive(Serialize)]
+pub struct EntryReport {
+    /// What a name-based scanner sees: the entry's CENTRAL-directory name.
+    pub name: String,
+    /// Set only for a cloaked entry (CVE-2026-115905): the LOCAL-header name a
+    /// streaming extractor actually honors, which differs from `name`. This is
+    /// the path the attack means to write; `written_to` shows where the sandbox
+    /// forced it to land instead.
+    pub cloaked_as: Option<String>,
+    /// Raw Unix mode read from the archive via `ZipFile::unix_mode()` — the
+    /// vulnerable value, special bits and all. Rendered octal, e.g. "0o104755".
+    pub declared_mode: Option<String>,
+    pub declared_setuid: bool,
+    pub declared_setgid: bool,
+    pub declared_sticky: bool,
+    /// Where it actually landed, relative to the sandbox root (None = refused).
+    pub written_to: Option<String>,
+    pub bytes_written: u64,
+    /// True when the entry tried to escape the sandbox (zip-slip / absolute path).
+    pub traversal_blocked: bool,
+    pub note: String,
+}
+
+#[derive(Serialize)]
+pub struct EscapeProbe {
+    pub target: String,
+    pub allowed: bool,
+    pub os_error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ExtractReport {
+    pub sandbox_root: String,
+    pub target_os: String,
+    pub target_is_unix: bool,
+    pub permission_code_active: bool,
+    pub entries: Vec<EntryReport>,
+    pub files_extracted: usize,
+    pub traversals_blocked: usize,
+    pub setuid_bits_in_archive: usize,
+    pub setuid_bits_applied: usize,
+    /// Count of entries carrying ANY privileged bit (setuid, setgid or sticky),
+    /// and how many of those bits the sandbox actually applied (always 0).
+    pub privileged_bits_in_archive: usize,
+    pub privileged_bits_applied: usize,
+    /// Bug 2 (CVE-2026-115905): entries whose LOCAL file-header name differs from
+    /// the CENTRAL-directory name a scanner would see. The sandbox doesn't fix
+    /// the differential (it's a crate bug) but confines any resulting write.
+    pub cloaked_entries: usize,
+    pub cloak_notes: Vec<String>,
+    pub escape_probes: Vec<EscapeProbe>,
+    /// What `ZipArchive::extract` returned: None on success, else the crate's own
+    /// error (it aborts on the first entry whose path escapes the root).
+    pub crate_extract_error: Option<String>,
+    /// Zip-slip symlinks that landed as REAL links pointing outside the root
+    /// (only possible on a Unix target; always 0 in the sandbox).
+    pub slip_escapes: usize,
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+/// Extract an uploaded archive into the sandbox tmp directory and report, per
+/// entry, what the archive asked for versus what the sandbox actually allowed.
+pub fn extract_into_sandbox(zip_bytes: &[u8]) -> ExtractReport {
+    let mut report = ExtractReport {
+        sandbox_root: SANDBOX_ROOT.to_string(),
+        target_os: target_label(),
+        target_is_unix: cfg!(unix),
+        // The crate applies Unix modes only under #[cfg(unix)]; on wasm this is false.
+        permission_code_active: cfg!(unix),
+        entries: Vec::new(),
+        files_extracted: 0,
+        traversals_blocked: 0,
+        setuid_bits_in_archive: 0,
+        setuid_bits_applied: 0,
+        privileged_bits_in_archive: 0,
+        privileged_bits_applied: 0,
+        cloaked_entries: 0,
+        cloak_notes: Vec::new(),
+        escape_probes: Vec::new(),
+        crate_extract_error: None,
+        slip_escapes: 0,
+        verdict: String::new(),
+        error: None,
+    };
+
+    let root = Path::new(SANDBOX_ROOT);
+    // Fresh sandbox each request: this is the single place we unzip into.
+    let _ = std::fs::remove_dir_all(root);
+    if let Err(e) = std::fs::create_dir_all(root) {
+        report.error = Some(format!("cannot prepare sandbox {SANDBOX_ROOT}: {e}"));
+        report.verdict = "sandbox unavailable".into();
+        return report;
+    }
+
+    let mut archive = match zip::ZipArchive::new(Cursor::new(zip_bytes)) {
+        Ok(a) => a,
+        Err(e) => {
+            report.error = Some(format!("not a readable zip archive: {e}"));
+            report.verdict = "rejected: unreadable archive".into();
+            return report;
+        }
+    };
+
+    // Local-header names (what a STREAMING extractor honors), aligned by index
+    // with `by_index` (the central directory). A mismatch is a cloaked entry
+    // (CVE-2026-115905): the scanner trusts `name`, the extractor writes this.
+    let local_names = local_header_names(zip_bytes);
+
+    // Pass 1: inspect every entry, writing nothing. This is what the report
+    // shows: what the archive ASKED for.
+    let mut planned: Vec<Plan> = Vec::new();
+    for i in 0..archive.len() {
+        let entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(e) => {
+                report.entries.push(EntryReport {
+                    name: format!("<entry {i}>"),
+                    cloaked_as: None,
+                    declared_mode: None,
+                    declared_setuid: false,
+                    declared_setgid: false,
+                    declared_sticky: false,
+                    written_to: None,
+                    bytes_written: 0,
+                    traversal_blocked: false,
+                    note: format!("could not read entry: {e}"),
+                });
+                planned.push(Plan::Skip);
+                continue;
+            }
+        };
+
+        // `name` is the CENTRAL-directory name (what a scanner clears, and what
+        // `ZipArchive::extract` writes). `honored` is the LOCAL-header name the
+        // crate's streaming extractor writes.
+        let name = entry.name().to_string();
+        let honored = local_names.get(i).cloned().unwrap_or_else(|| name.clone());
+        let is_cloaked = honored != name;
+
+        // The vulnerable value: unix_mode() returns external_attributes>>16 with
+        // NO masking, and it is exactly what `extract()` hands to set_permissions
+        // on a Unix target. Read here only to report what the archive asked for.
+        let mode = entry.unix_mode();
+        let is_link = entry.is_symlink();
+        let special = |bit: u32| !is_link && mode.map(|m| m & bit != 0).unwrap_or(false);
+        let (setuid, setgid, sticky) = (special(0o4000), special(0o2000), special(0o1000));
+        if setuid {
+            report.setuid_bits_in_archive += 1;
+        }
+        if setuid || setgid || sticky {
+            report.privileged_bits_in_archive += 1;
+        }
+        if is_cloaked {
+            report.cloaked_entries += 1;
+            report.cloak_notes.push(format!(
+                "cloaked entry: a scanner reading the central directory sees {name:?} and clears it, but the local header the crate's streaming extractor honors says {honored:?} — on a vulnerable host that silently overwrites the real file. Here the write is confined to {}, which nothing else trusts.",
+                report.sandbox_root
+            ));
+        }
+        let declared_mode = mode.map(|m| format!("{:#o}", m & 0o7777));
+
+        planned.push(match confine(Path::new(if is_cloaked { &honored } else { &name })) {
+            // A `../` name: zip's own extract() refuses it.
+            None => Plan::BadPath,
+            Some(rel) if is_cloaked => Plan::Cloaked { rel, header_start: entry.header_start() },
+            Some(rel) if is_link => Plan::Link { rel },
+            Some(rel) => Plan::File { rel },
+        });
+
+        report.entries.push(EntryReport {
+            name,
+            cloaked_as: if is_cloaked { Some(honored) } else { None },
+            declared_mode,
+            declared_setuid: setuid,
+            declared_setgid: setgid,
+            declared_sticky: sticky,
+            written_to: None,
+            bytes_written: 0,
+            traversal_blocked: false,
+            note: String::new(),
+        });
+    }
+
+    // Pass 2: the vulnerable call itself. `ZipArchive::extract` is the API
+    // RUSTSEC-2026-0367 lives in: on a Unix target it copies each entry's
+    // unix_mode() straight into set_permissions, setuid bit and all, and creates
+    // symlink entries without checking where they point. Here it runs unpatched;
+    // wasm32-wasip2 is neither Unix nor Windows, so the crate's permission and
+    // symlink code was compiled out of this component.
+    //
+    // extract() canonicalizes its target first. Under WASI that resolves a path
+    // by walking up from `/`, which this component cannot see (its only preopen
+    // is SANDBOX_ROOT), so we step into the root and extract ".".
+    let dir = crate_dir(root);
+    let crate_error = match &dir {
+        Ok(dir) => archive.extract(dir).err().map(|e| e.to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    report.crate_extract_error = crate_error.clone();
+
+    // Pass 3: the cloaked entries, through the crate's STREAMING extractor
+    // (`ZipStreamReader::extract`), which trusts the local header. It starts at
+    // the cloaked entry's local header, so it writes exactly the path a scanner
+    // never saw. This is where CVE-2026-115905 is exercised.
+    for plan in &planned {
+        if let (Plan::Cloaked { header_start, .. }, Ok(dir)) = (plan, &dir) {
+            let tail = zip_bytes.get(*header_start as usize..).unwrap_or_default();
+            let _ = zip::unstable::stream::ZipStreamReader::new(Cursor::new(tail)).extract(dir);
+        }
+    }
+
+    // Measure what the crate actually left on disk, rather than assert it.
+    for (plan, entry) in planned.iter().zip(report.entries.iter_mut()) {
+        let rel = match plan {
+            Plan::Skip => continue,
+            Plan::BadPath => {
+                report.traversals_blocked += 1;
+                entry.traversal_blocked = true;
+                entry.note = "path escapes the extraction root: zip's own extract() rejects it (\"Invalid file path\") and aborts, and the WASI preopen makes it unwritable anyway".into();
+                continue;
+            }
+            Plan::File { rel } | Plan::Link { rel } | Plan::Cloaked { rel, .. } => rel,
+        };
+        let path = root.join(rel);
+        let Ok(md) = std::fs::symlink_metadata(&path) else {
+            entry.note = match &crate_error {
+                Some(e) => format!("not written: extract() stopped first ({e})"),
+                None => "not written".to_string(),
+            };
+            continue;
+        };
+        report.files_extracted += 1;
+        entry.written_to = Some(rel.to_string_lossy().into_owned());
+        entry.bytes_written = md.len();
+
+        if let Plan::Link { .. } = plan {
+            let target = std::fs::read_link(&path).ok();
+            match target.filter(|t| !t.starts_with(root) && confine(t).is_none()) {
+                Some(t) => {
+                    report.slip_escapes += 1;
+                    entry.note = format!("ESCAPED: extract() planted a real symlink to {}; anything that later writes {}/{} writes there instead", t.display(), report.sandbox_root, rel.display());
+                }
+                None => {
+                    report.traversals_blocked += 1;
+                    entry.traversal_blocked = true;
+                    // Read the body only if it is a plain file: never follow a link.
+                    let target = if md.is_symlink() {
+                        String::new()
+                    } else {
+                        std::fs::read_to_string(&path).unwrap_or_default()
+                    };
+                    entry.note = format!("symlink to {target} landed as an inert plain file: the crate's symlink code is compiled out of wasm32-wasip2, and nothing outside {} exists for a link to reach", report.sandbox_root);
+                }
+            }
+            continue;
+        }
+
+        if let (Plan::Cloaked { .. }, Some(honored)) = (plan, &entry.cloaked_as) {
+            entry.note = format!("cloaked write honored but confined: the crate's streaming extractor wrote the local-header path {honored:?} to {}/{} — inside the one directory this component can write", report.sandbox_root, rel.display());
+            continue;
+        }
+
+        let applied = applied_privileged_bits(&path);
+        if applied != 0 {
+            report.privileged_bits_applied += 1;
+            if applied & 0o4000 != 0 {
+                report.setuid_bits_applied += 1;
+            }
+        }
+        entry.note = if applied != 0 {
+            format!("extract() applied privileged bits {applied:#o}")
+        } else if entry.declared_setuid || entry.declared_setgid || entry.declared_sticky {
+            if !cfg!(unix) {
+                "extracted by the vulnerable ZipArchive::extract, privileged bit NOT applied: wasm32-wasip2 is not a Unix target, so the crate's set_permissions code is compiled out and the WASI filesystem has no mode bits at all".to_string()
+            } else if crate_error.is_some() {
+                "extracted, privileged bit not applied: extract() sets permissions in a second pass, and it aborted before reaching it".to_string()
+            } else {
+                "extracted, privileged bit not applied: the OS dropped it (macOS clears setgid when you are not in the file's group)".to_string()
+            }
+        } else {
+            "extracted by ZipArchive::extract inside the sandbox tmp dir".to_string()
+        };
+    }
+
+    // Defense #2, shown concretely: prove the component has no authority outside
+    // its one tmp dir by attempting writes to paths a real exploit would target.
+    report.escape_probes = vec![
+        probe_write("/tmp/zip-slip-escape"),
+        probe_write("/etc/cron.d/zip-demo-escape"),
+    ];
+
+    report.verdict = build_verdict(&report);
+    report
+}
+
+/// Try to write a sentinel outside the sandbox and report whether the sandbox
+/// allowed it. We expect every one of these to be refused.
+///
+/// The probe only runs inside the Wasm sandbox. Built natively (a test harness,
+/// say, run as root) it would really create a file in /etc/cron.d, so there it
+/// is skipped. `create_new` means it can never overwrite an existing file.
+fn probe_write(target: &str) -> EscapeProbe {
+    if !cfg!(target_os = "wasi") {
+        return EscapeProbe {
+            target: target.to_string(),
+            allowed: false,
+            os_error: Some("skipped: escape probes only run inside the Wasm sandbox".into()),
+        };
+    }
+    let created = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"escape"));
+    match created {
+        Ok(()) => {
+            // Should never happen in the sandbox; clean up if it somehow did.
+            let _ = std::fs::remove_file(target);
+            EscapeProbe { target: target.to_string(), allowed: true, os_error: None }
+        }
+        Err(e) => EscapeProbe {
+            target: target.to_string(),
+            allowed: false,
+            os_error: Some(e.to_string()),
+        },
+    }
+}
+
+/// What pass 1 decided to look for on disk once the crate has extracted.
+enum Plan {
+    /// Unreadable entry; nothing to check.
+    Skip,
+    /// A `../` name that zip's own extract() refuses.
+    BadPath,
+    /// An ordinary file, written by `ZipArchive::extract`.
+    File { rel: PathBuf },
+    /// A symlink entry (zip slip), written by `ZipArchive::extract`.
+    Link { rel: PathBuf },
+    /// A cloaked entry, written by the streaming extractor at its local-header path.
+    Cloaked { rel: PathBuf, header_start: u64 },
+}
+
+/// The directory to hand the crate's extractors. Natively that is the root
+/// itself. Under WASI, `canonicalize` walks up from `/`, outside the only
+/// preopen, so step into the root and extract "." instead.
+fn crate_dir(root: &Path) -> std::io::Result<PathBuf> {
+    if cfg!(target_os = "wasi") {
+        std::env::set_current_dir(root)?;
+        Ok(PathBuf::from("."))
+    } else {
+        Ok(root.to_path_buf())
+    }
+}
+
+/// The setuid/setgid/sticky bits actually set on an extracted file. On a Unix
+/// target this reads the real mode. A WASI filestat carries no mode field at all
+/// (type, size, timestamps, link count), so in the sandbox there is nothing that
+/// could have been applied.
+fn applied_privileged_bits(path: &Path) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).map(|m| m.permissions().mode() & 0o7000).unwrap_or(0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        0
+    }
+}
+
+/// Reduce a path to a safe relative path inside the root, or None if it tries to
+/// escape (absolute, or any `..` / root component).
+fn confine(p: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::Normal(c) => out.push(c),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// The LOCAL file-header names, in file order, via the streaming reader — what a
+/// streaming extractor honors. Aligned by index with `ZipArchive::by_index`
+/// (the central directory); where the two disagree, the entry is cloaked.
+fn local_header_names(zip_bytes: &[u8]) -> Vec<String> {
+    let mut rdr = Cursor::new(zip_bytes);
+    let mut names = Vec::new();
+    while let Ok(Some(entry)) = zip::read::read_zipfile_from_stream(&mut rdr) {
+        names.push(entry.name().to_string());
+    }
+    names
+}
+
+fn build_verdict(r: &ExtractReport) -> String {
+    if r.privileged_bits_applied > 0 || r.slip_escapes > 0 {
+        return format!(
+            "VULNERABLE: {} privileged bit(s) applied and {} symlink(s) planted outside {}.",
+            r.privileged_bits_applied, r.slip_escapes, r.sandbox_root
+        );
+    }
+    // Describe only what the archive itself carried; the per-entry counts below
+    // are exactly what the table shows.
+    let mut parts: Vec<String> = Vec::new();
+    if r.privileged_bits_in_archive > 0 {
+        parts.push(format!(
+            "{} privileged (setuid/setgid/sticky) entr{} in the archive, 0 applied",
+            r.privileged_bits_in_archive,
+            if r.privileged_bits_in_archive == 1 { "y" } else { "ies" },
+        ));
+    }
+    if r.traversals_blocked > 0 {
+        parts.push(format!(
+            "{} zip-slip symlink{} neutralized",
+            r.traversals_blocked,
+            if r.traversals_blocked == 1 { "" } else { "s" },
+        ));
+    }
+    if r.cloaked_entries > 0 {
+        parts.push(format!(
+            "{} cloaked entr{} (CVE-2026-115905) honored but confined",
+            r.cloaked_entries,
+            if r.cloaked_entries == 1 { "y" } else { "ies" },
+        ));
+    }
+    if parts.is_empty() {
+        format!("Extraction confined to {}. Nothing in the archive escaped.", r.sandbox_root)
+    } else {
+        format!("MITIGATED: {}. Everything stayed inside {}.", parts.join("; "), r.sandbox_root)
+    }
+}
+
+/// A human-readable target label. `std::env::consts::OS` is empty on a wasm
+/// component, so fall back to the compile-time target family.
+fn target_label() -> String {
+    let os = std::env::consts::OS;
+    if !os.is_empty() {
+        format!("{os}/{}", std::env::consts::ARCH)
+    } else if cfg!(target_os = "wasi") {
+        "wasm32-wasip2 (wasi component — not unix)".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
