@@ -16,13 +16,13 @@ metadata:
   name: egress-exfil-sandbox
   namespace: default
   annotations:
-    # Local unsigned image. For Cosmonic Control / production, SIGN the image
+    # Published (public ghcr) unsigned image. For Cosmonic Control / production, SIGN the image
     # and REMOVE this annotation.
     desktop.cosmonic.com/unsafe-allow-unsigned: "true"
 spec:
   components:
     - name: shipper
-      image: oci.localhost:8200/apps/egress-exfil-sandbox-shipper:0.1.3@sha256:9b90b7704e0f2ff4f400d0bcccf8859507e8511246b63a4e0f1c5e1f4ddefd6f
+      image: ghcr.io/cosmonic-labs/demo-egress-exfil-sandbox/shipper:0.1.3@sha256:76892f28c5b3c4f0ab0c7811f9c36befd49b05c8e89ec73579498155deb90d8b
       poolSize: 8
       localResources:
         environment:

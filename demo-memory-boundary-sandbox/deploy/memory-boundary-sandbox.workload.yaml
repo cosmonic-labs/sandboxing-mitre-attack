@@ -16,8 +16,9 @@
 # deliberate out-of-bounds write and the linear-memory trap are not implemented
 # (see README, "Status").
 #
-# Images are in Cosmonic Desktop's built-in registry (oci.localhost:8200),
-# pinned by digest. Build and push them first; see cosmonic-app/README.md.
+# Images are published on ghcr (public), pinned by digest: nothing to build.
+# To run your own build, push it to Desktop's built-in registry
+# (oci.localhost:8200) and swap the `image:` refs; see cosmonic-app/README.md.
 #
 # Apply: cosmonic_workload_apply(<this file>)  (or the Control equivalent).
 apiVersion: runtime.wasmcloud.dev/v1alpha1
@@ -26,7 +27,7 @@ metadata:
   name: memory-boundary-sandbox
   namespace: default
   annotations:
-    # The local demo images are unsigned, so Cosmonic Desktop needs this to run
+    # The published demo images are unsigned, so Cosmonic Desktop needs this to run
     # them. For a Cosmonic Control / production deployment, SIGN the images and
     # REMOVE this annotation — do not weaken signature enforcement there.
     desktop.cosmonic.com/unsafe-allow-unsigned: "true"
@@ -35,7 +36,7 @@ spec:
     # The UI + HTTP entrypoint. Imports parsing and secrets (satisfied by the
     # two components below, auto-linked). Zero capability grants.
     - name: web
-      image: oci.localhost:8200/apps/memory-boundary-sandbox-web:0.1.0@sha256:4dc0470e51b0487a613aa6d9a6e8cfcda9f2fca4eb30cef716e23135010ff503
+      image: ghcr.io/cosmonic-labs/demo-memory-boundary-sandbox/web:0.1.0@sha256:4dc0470e51b0487a613aa6d9a6e8cfcda9f2fca4eb30cef716e23135010ff503
       poolSize: 8
       localResources:
         allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
@@ -43,7 +44,7 @@ spec:
     # The C record parser: the component that touches untrusted bytes. No
     # imports, no grants, no HTTP.
     - name: parser
-      image: oci.localhost:8200/apps/memory-boundary-sandbox-parser:0.1.0@sha256:0364e97de131e842759616ed5d8bb2759f980e0052f89301cc4ff420fb7e8355
+      image: ghcr.io/cosmonic-labs/demo-memory-boundary-sandbox/parser:0.1.0@sha256:0364e97de131e842759616ed5d8bb2759f980e0052f89301cc4ff420fb7e8355
       poolSize: 1
       localResources:
         allowedHosts: []   # deny-all egress; no volume
@@ -51,7 +52,7 @@ spec:
     # The vault: holds the (fake) secret in its own linear memory. No grants,
     # no HTTP.
     - name: vault
-      image: oci.localhost:8200/apps/memory-boundary-sandbox-vault:0.1.0@sha256:f2926845f833ae8968b29e2a618d7fb6d82983dcfd5ceeada79a04f34d834215
+      image: ghcr.io/cosmonic-labs/demo-memory-boundary-sandbox/vault:0.1.0@sha256:f2926845f833ae8968b29e2a618d7fb6d82983dcfd5ceeada79a04f34d834215
       poolSize: 1
       localResources:
         allowedHosts: []   # deny-all egress; no volume

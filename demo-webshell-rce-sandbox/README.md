@@ -34,8 +34,7 @@ Nothing is simulated: every result is the runtime's own error. The attacker addr
 in `10.0.0.0/29` (RFC 1918); the sweep is three addresses and three ports, a containment probe and
 not a scanner.
 
-The **Pivot** button is in the local build (`0.1.9`, below) until the next ghcr publish; the
-published `0.1.6` image has the first three techniques.
+All four techniques, including **Pivot**, are in the published `0.1.9` image.
 
 ## Quickstart (Cosmonic Desktop)
 

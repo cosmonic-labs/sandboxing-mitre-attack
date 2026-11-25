@@ -105,8 +105,9 @@ enforced cannot be what protects the neighbours.
 
 1. **Install [Cosmonic Desktop](https://cosmonic.com/desktop/).** It runs WebAssembly components as
    sandboxed workloads on macOS, Windows and Linux, and listens on `127.0.0.1:8200`.
-2. **Build and push the image**, then apply the manifest. The image lives in Desktop's built-in
-   registry, so it has to be built once (see [Build from source](#build-from-source)). The easiest
+2. **Apply the manifest.** It pins the published component by digest on ghcr
+   (`ghcr.io/cosmonic-labs/demo-resource-hijack-sandbox/miner`), so there is nothing to build
+   (to run your own build, see [Build from source](#build-from-source)). The easiest
    route is an AI assistant connected to Desktop's MCP server
    ([Connect coding agents](https://cosmonic.com/docs/desktop/coding-agents/)):
 
@@ -369,8 +370,8 @@ wash oci push --insecure oci.localhost:8200/apps/resource-hijack-sandbox-miner:0
   target/wasm32-wasip2/release/resource_hijack_miner.wasm
 ```
 
-Then apply [`deploy/resource-hijack-sandbox.workload.yaml`](deploy/resource-hijack-sandbox.workload.yaml).
-It pins `0.1.3` by digest; if you rebuild, bump the tag and pin your own digest
+Then point the `image:` line in [`deploy/resource-hijack-sandbox.workload.yaml`](deploy/resource-hijack-sandbox.workload.yaml)
+at your local image and apply it. It pins the published `0.1.3` by digest; if you rebuild, bump the tag and pin your own digest
 (`cosmonic_image_inspect` prints it). Needs Rust 1.94 or newer with the `wasm32-wasip2` target, and
 `wash`. Cosmonic Desktop's Preflight check installs them.
 

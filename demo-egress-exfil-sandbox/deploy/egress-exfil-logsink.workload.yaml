@@ -16,13 +16,13 @@ metadata:
   name: egress-exfil-logsink
   namespace: default
   annotations:
-    # Local unsigned image. For Cosmonic Control / production, SIGN the image
+    # Published (public ghcr) unsigned image. For Cosmonic Control / production, SIGN the image
     # and REMOVE this annotation.
     desktop.cosmonic.com/unsafe-allow-unsigned: "true"
 spec:
   components:
     - name: logsink
-      image: oci.localhost:8200/apps/egress-exfil-sandbox-logsink:0.1.0@sha256:c5aa6fe756ef552a600f229ad0a9fc0ebc6db4e031cca8d0e6a3b1b64722520e
+      image: ghcr.io/cosmonic-labs/demo-egress-exfil-sandbox/logsink:0.1.0@sha256:4aefaea00b4cf25b028ea8f1db40d2bbaae41b71f995a3d94d37ec3c63d4779b
       poolSize: 4
       localResources:
         allowedHosts: []   # deny-all egress; no volume = zero filesystem authority

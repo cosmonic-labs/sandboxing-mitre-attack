@@ -55,8 +55,9 @@ are not policy questions: there is nothing to call.
 
 1. **Install [Cosmonic Desktop](https://cosmonic.com/desktop/).** It runs WebAssembly components as
    sandboxed workloads on macOS, Windows and Linux, and listens on `127.0.0.1:8200`.
-2. **Build and publish the two components** to Desktop's built-in registry (see
-   [Build from source](#build-from-source)). The manifests pin local images by digest.
+2. **Nothing to build.** The manifests pin the two published components by digest on ghcr
+   (`ghcr.io/cosmonic-labs/demo-egress-exfil-sandbox/{shipper,logsink}`). To run your own build
+   instead, see [Build from source](#build-from-source).
 3. **Apply two manifests**, sink first. The easiest route is an AI assistant connected to Desktop's
    MCP server ([Connect coding agents](https://cosmonic.com/docs/desktop/coding-agents/)):
 
@@ -306,8 +307,8 @@ wash oci push --insecure oci.localhost:8200/apps/egress-exfil-sandbox-logsink:0.
   logsink/target/wasm32-wasip2/release/egress_exfil_logsink.wasm
 ```
 
-Then update the `@sha256:` digests in `deploy/*.workload.yaml` if your build differs, and apply the
-manifests. The fuzz corpus is compiled into the shipper, so rebuild it after editing
+Then point the `image:` lines in `deploy/*.workload.yaml` at your local images and digests, and
+apply the manifests. The fuzz corpus is compiled into the shipper, so rebuild it after editing
 `fuzz/corpus.txt` (`fuzz/run.py` tells you if the two disagree). `docs/hero/render.sh` regenerates
 the hero image.
 

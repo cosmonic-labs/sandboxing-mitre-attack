@@ -36,7 +36,7 @@ spec:
     # The UI + HTTP entrypoint. Imports cosmonic:path-demo/viewing (satisfied by
     # the viewer component below, auto-linked). Zero capability grants.
     - name: web
-      image: oci.localhost:8200/apps/path-traversal-sandbox-web:0.1.4@sha256:40379e592a224b0aa330d20bbc102e62dd414d1df5f41efb99e2930a9a30c009
+      image: ghcr.io/cosmonic-labs/demo-path-traversal-sandbox/web:0.1.4@sha256:77c9fc3b61211f676f6ad81248457f8fc8f0064047255dd9a9f85284b1f64ce5
       poolSize: 8
       localResources:
         allowedHosts: []   # deny-all egress; no volume = zero filesystem authority
@@ -44,7 +44,7 @@ spec:
     # The vulnerable config viewer. Exports cosmonic:path-demo/viewing. Its ONLY
     # authority is the /var/app/config directory, read-only; no network, no HTTP.
     - name: viewer
-      image: oci.localhost:8200/apps/path-traversal-sandbox-viewer:0.1.5@sha256:4b3e4ec2963ee8440ddfbd40f6d2d82a63b9921e5d19d54c8c787d0698543764
+      image: ghcr.io/cosmonic-labs/demo-path-traversal-sandbox/viewer:0.1.5@sha256:73848748d78c6c7ed5693a18dc039a2c9e92f201ecc74b27c01d1122bea44e8a
       poolSize: 1
       localResources:
         allowedHosts: []                  # deny-all egress: a file it read could not leave
@@ -57,7 +57,7 @@ spec:
   # there and exits. Read-only in this variant; no network, no HTTP, no link.
   service:
     name: seeder
-    image: oci.localhost:8200/apps/path-traversal-sandbox-seeder:0.1.2@sha256:609f0ad62e79ed72fe49bf5308be5748adb9c766f3c07beb3e4e0549885dc556
+    image: ghcr.io/cosmonic-labs/demo-path-traversal-sandbox/seeder:0.1.2@sha256:5b99eed9213c37a4661fc8c7758c794bf99d183a7143e54eed8fbfa5654463a6
     maxRestarts: 0
     localResources:
       allowedHosts: []                    # deny-all egress
@@ -69,7 +69,7 @@ spec:
     - name: config
       hostPath:
         # EDIT ME: the absolute path of deploy/volume/config in your checkout.
-        path: /Users/liam/source/cosmonic-labs/mitre-attack/demo-path-traversal-sandbox/deploy/volume/config
+        path: /ABSOLUTE/PATH/TO/sandboxing-mitre-attack/demo-path-traversal-sandbox/deploy/volume/config
   hostInterfaces:
     # Binds to the component that exports wasi:http/handler (web). viewer and
     # seeder have no HTTP surface, so routing is unambiguous.

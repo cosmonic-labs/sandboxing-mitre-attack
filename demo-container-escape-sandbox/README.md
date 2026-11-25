@@ -54,21 +54,11 @@ through.
 
 1. **Install [Cosmonic Desktop](https://cosmonic.com/desktop/).** It runs WebAssembly components as
    sandboxed workloads on macOS, Windows and Linux, and listens on `127.0.0.1:8200`.
-2. **Build and push the image**, then **apply the manifest.**
+2. **Apply the manifest.**
    [`deploy/container-escape-sandbox.workload.yaml`](deploy/container-escape-sandbox.workload.yaml)
-   pins the component by digest in Desktop's built-in registry (`oci.localhost:8200`). The image is
-   not published to a public registry yet, so build it first:
-
-   ```bash
-   cd cosmonic-app/runner
-   wash build
-   wash oci push --insecure oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.3 \
-     target/wasm32-wasip2/release/container_escape_runner.wasm
-   ```
-
-   If your build's digest differs, bump the tag and pin your own digest
-   (`cosmonic_image_inspect` prints it). Then apply the manifest; the easiest route is an AI
-   assistant connected to Desktop's MCP server
+   pins the published component by digest on ghcr
+   (`ghcr.io/cosmonic-labs/demo-container-escape-sandbox/runner`), so there is nothing to build.
+   The easiest route is an AI assistant connected to Desktop's MCP server
    ([Connect coding agents](https://cosmonic.com/docs/desktop/coding-agents/)):
 
    > "Apply `deploy/container-escape-sandbox.workload.yaml` to Cosmonic Desktop, then show me its status."
@@ -170,7 +160,7 @@ one inbound HTTP route, no volumes, no outbound hosts.
 ### What the component imports
 
 `cosmonic_image_inspect` on the published image
-(`oci.localhost:8200/apps/container-escape-sandbox-runner:0.1.3@sha256:7e3f2f8e…`) reports these
+(`ghcr.io/cosmonic-labs/demo-container-escape-sandbox/runner:0.1.3@sha256:0fc7ab82…`) reports these
 imports, and `cosmonic_workload_get` reports the same list for the running component:
 
 ```

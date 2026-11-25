@@ -51,9 +51,9 @@ directory handle. The sandbox is the layer that holds when that fix is missing.
 
 1. **Install [Cosmonic Desktop](https://cosmonic.com/desktop/).** It runs WebAssembly components as
    sandboxed workloads on macOS, Windows and Linux, and listens on `127.0.0.1:8200`.
-2. **Build and push the three components** to Desktop's built-in registry (see
-   [Build from source](#build-from-source)). The manifest pins images in the local registry, so
-   unlike the zip demo there is nothing prebuilt to pull yet.
+2. **Nothing to build.** The manifests pin the three published components by digest on ghcr
+   (`ghcr.io/cosmonic-labs/demo-path-traversal-sandbox/{web,viewer,seeder}`). To run your own
+   build instead, see [Build from source](#build-from-source).
 3. **Pick a manifest.** The default,
    [`deploy/path-traversal-sandbox.workload.yaml`](deploy/path-traversal-sandbox.workload.yaml),
    uses an `ephemeral` volume that the `seeder` fills at startup: nothing to edit, and the same
@@ -428,7 +428,7 @@ cd ../web              && cargo build --target wasm32-wasip2 --release
 cd ../seeder           && cargo build --target wasm32-wasip2 --release
 cd ../..
 # publish to Desktop's built-in registry (bump the tag on every re-push: a reused tag keeps
-# serving the old build), then update the digests in both manifests under deploy/
+# serving the old build), then point the image: lines in both manifests under deploy/ at them
 wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-seeder:<tag> \
   cosmonic-app/seeder/target/wasm32-wasip2/release/path_traversal_seeder.wasm
 wash oci push --insecure oci.localhost:8200/apps/path-traversal-sandbox-viewer:<tag> \

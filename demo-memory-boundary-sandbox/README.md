@@ -64,9 +64,9 @@ every overflow traps.
 
 1. **Install [Cosmonic Desktop](https://cosmonic.com/desktop/).** It runs WebAssembly components
    as sandboxed workloads and listens on `127.0.0.1:8200`.
-2. **Build and push the three images** to Desktop's built-in registry. See
-   [Build from source](#build-from-source). The manifest pins them by digest, so update the
-   digests if your build differs.
+2. **Nothing to build.** The manifest pins the three published images by digest on ghcr
+   (`ghcr.io/cosmonic-labs/demo-memory-boundary-sandbox/{web,parser,vault}`). To run your own
+   build instead, see [Build from source](#build-from-source) and point the `image:` lines at it.
 3. **Apply the manifest**,
    [`deploy/memory-boundary-sandbox.workload.yaml`](deploy/memory-boundary-sandbox.workload.yaml).
    The easiest route is an AI assistant connected to Desktop's MCP server
