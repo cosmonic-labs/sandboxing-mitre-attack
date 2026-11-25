@@ -1,0 +1,16 @@
+# wash v2 config for the RUNNER component (the only component in this demo).
+#
+# A "CI runner" that executes the steps of whatever job it is handed, and
+# serves the branded UI. It has NO filesystem (no volume) and NO network
+# egress: every probe a poisoned job makes toward a container runtime's
+# control plane has nothing to reach it with.
+version: "0.1.0"
+build:
+  command: cargo build --target wasm32-wasip2 --release
+  component_path: target/wasm32-wasip2/release/container_escape_runner.wasm
+workload:
+  # Deny-all egress: the Docker API over TCP, the kubelet and the Kubernetes
+  # API server are all refused by the host before a connection is made.
+  allowedHosts: []
+  # No volumeMounts, no volumes: there is no /var/run, no /proc and no
+  # service-account directory inside the sandbox.
