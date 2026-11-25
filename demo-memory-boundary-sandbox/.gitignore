@@ -1,0 +1,14 @@
+# Rust build output
+target/
+**/target/
+
+# wasm build artifacts
+*.wasm
+
+# macOS
+.DS_Store
+
+# generated wit-bindgen C bindings and C build output
+cosmonic-app/parser/gen/
+cosmonic-app/parser/build/
+*.o

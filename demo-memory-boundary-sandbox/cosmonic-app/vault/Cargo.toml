@@ -1,0 +1,21 @@
+[package]
+name = "memory-boundary-vault"
+edition = "2021"
+version = "0.1.0"
+rust-version = "1.94"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No HTTP, no WASI crates. This component exports ONE custom interface
+# (`cosmonic:memory-demo/secrets`) and is invoked only by the `web` component
+# over the host's runtime link.
+wit-bindgen = { version = "0.62.0", default-features = false, features = ["macros"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -1,0 +1,13 @@
+# wash v2 config for the PARSER component (C, built with wasi-sdk).
+#
+# This is the component that touches the untrusted record bytes. It has no
+# grants at all: no volume, no network, no HTTP surface. Its world has no
+# imports either, so there is nothing for a grant to attach to.
+version: "0.1.0"
+build:
+  command: ./build.sh
+  component_path: build/parser.wasm
+workload:
+  # Deny-all egress.
+  allowedHosts: []
+  # No volumeMounts, no volumes: no on-disk authority.
